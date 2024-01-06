@@ -38,7 +38,8 @@
 
 #define EROWS (2*NROWS)
 #define ECOLS (4*NCOLS)
-static bool lattice[NT * EROWS * ECOLS];
+typedef uint8_t spin_t;
+static spin_t lattice[NT * EROWS * ECOLS];
 
 static inline int ind_tri(int t, int i, int j) {
   assert(t < NT && i < NROWS && j < 2*NCOLS);
@@ -112,26 +113,29 @@ static struct {
 
 // statically alloc'd global queue
 // capacity = maximum number of sites in a sublattice
-#define QUEUE_CAP NROWS * 3*NCOLS
+#define QUEUE_CAP (NT * NROWS * 3*NCOLS)
 typedef enum {
   ODD, EVEN
 } parity;
 typedef struct {
   int t, i, j;
   parity p;
-} coord;
+} coord_t;
 static struct {
-  coord values[QUEUE_CAP];
+  coord_t values[QUEUE_CAP];
   int size;
 } queue;
-static inline int empty() {
+static inline void q_init() {
+  queue.size = 0;
+}
+static inline int q_empty() {
   return queue.size == 0;
 }
-static inline coord pop() {
-  assert(!empty());
+static inline coord_t q_pop() {
+  assert(!q_empty());
   return queue.values[--queue.size];
 }
-static inline void push(coord idx) {
+static inline void q_push(coord_t idx) {
   assert(queue.size < QUEUE_CAP);
   queue.values[queue.size++] = idx;
 }
@@ -153,8 +157,29 @@ static double betaP = 1.0;
 static double betaPP = 0.0;
 
 void init_cold() {
-  memset(lattice, 0, sizeof(lattice));
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_tri(t, i, j)] = false;
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_pet_even(t, i, j)] = false;
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        lattice[ind_pet_odd(t, i, j)] = false;
+      }
+    }
+  }
 }
+
 bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return false;
@@ -225,12 +250,13 @@ void sample_tri_bonds() {
         bool tri_ud = lattice[ind_tri(t, tri_i_ud, j)];
         
         // relevant petals
+        int j_odd = j/2;
         bool pet_bwd_l = lattice[ind_pet_even(t, i, j_l)];
         bool pet_bwd_r = lattice[ind_pet_even(t, i, j)];
-        bool pet_bwd_ud = lattice[ind_pet_odd(t, pet_i_ud, j)];
+        bool pet_bwd_ud = lattice[ind_pet_odd(t, pet_i_ud, j_odd)];
         bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
         bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
-        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j)];
+        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
 
         // bonds
         // T_FWD / T_BWD
@@ -277,12 +303,11 @@ void sample_tri_bonds() {
   }
 }
 
-void flood_fill_tri(bool spin) {
-  while (!empty()) {
-    coord x = pop();
+void flood_fill_tri(spin_t spin) {
+  while (!q_empty()) {
+    coord_t x = q_pop();
     int t = x.t, i = x.i, j = x.j;
-    assert(!seen.tri[t][i][j]);
-    seen.tri[t][i][j] = true;
+    assert(seen.tri[t][i][j]);
     int idx = ind_tri(t, i, j);
     lattice[idx] = spin;
     bond_t bond = bonds.tri[t][i][j];
@@ -290,35 +315,40 @@ void flood_fill_tri(bool spin) {
     if (bond_tfwd(bond)) {
       int tfwd = wrap_t(t+1);
       if (!seen.tri[tfwd][i][j]) {
-        push((coord){tfwd, i, j});
+        seen.tri[tfwd][i][j] = true;
+        q_push((coord_t){tfwd, i, j});
       }
     }
     // TBWD
     if (bond_tbwd(bond)) {
       int tbwd = wrap_t(t-1);
       if (!seen.tri[tbwd][i][j]) {
-        push((coord){tbwd, i, j});
+        seen.tri[tbwd][i][j] = true;
+        q_push((coord_t){tbwd, i, j});
       }
     }
     // LEFT
     if (bond_l(bond)) {
       int j_l = wrap_dj(j-1);
       if (!seen.tri[t][i][j_l]) {
-        push((coord){t, i, j_l});
+        seen.tri[t][i][j_l] = true;
+        q_push((coord_t){t, i, j_l});
       }
     }
     // RIGHT
     if (bond_r(bond)) {
       int j_r = wrap_dj(j-1);
       if (!seen.tri[t][i][j_r]) {
-        push((coord){t, i, j_r});
+        seen.tri[t][i][j_r] = true;
+        q_push((coord_t){t, i, j_r});
       }
     }
     // UP/DOWN
     if (bond_u(bond) || bond_d(bond)) {
       int i_ud = wrap_i(((i+j) % 2 == 0) ? i+1 : i-1);
       if (!seen.tri[t][i_ud][j]) {
-        push((coord){t, i_ud, j});
+        seen.tri[t][i_ud][j] = true;
+        q_push((coord_t){t, i_ud, j});
       }
     }
   }
@@ -332,7 +362,9 @@ void update_tri_spins() {
         if (seen.tri[t][i][j]) {
           continue;
         }
-        push((coord){t, i, j});
+        seen.tri[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j});
         flood_fill_tri(rand_bool());
       }
     }
@@ -381,7 +413,7 @@ void sample_pet_bonds() {
         bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
         int i_u = i;
         int i_d = wrap_i(i+1);
-        int j_even = 2*j + 2*(i % 2);
+        int j_even = 2*j + (i % 2);
         int j_even_r = j_even;
         int j_even_l = wrap_dj(j_even - 1);
         bool pet_ur = lattice[ind_pet_even(t, i_u, j_even_r)];
@@ -430,14 +462,13 @@ void sample_pet_bonds() {
   }
 }
 
-void flood_fill_pet(bool spin) {
-  while (!empty()) {
-    coord x = pop();
+void flood_fill_pet(spin_t spin) {
+  while (!q_empty()) {
+    coord_t x = q_pop();
     int t = x.t, i = x.i, j = x.j;
     // even petals
     if (x.p == EVEN) {
-      assert(!seen.pet_even[t][i][j]);
-      seen.pet_even[t][i][j] = true;
+      assert(seen.pet_even[t][i][j]);
       int idx = ind_pet_even(t, i, j);
       lattice[idx] = spin;
       int bond = bonds.pet_even[t][i][j];
@@ -445,14 +476,16 @@ void flood_fill_pet(bool spin) {
       if (bond_tfwd(bond)) {
         int tfwd = wrap_t(t+1);
         if (!seen.pet_even[tfwd][i][j]) {
-          push((coord){tfwd, i, j, EVEN});
+          seen.pet_even[tfwd][i][j] = true;
+          q_push((coord_t){tfwd, i, j, EVEN});
         }
       }
       // TBWD
       if (bond_tbwd(bond)) {
         int tbwd = wrap_t(t-1);
         if (!seen.pet_even[tbwd][i][j]) {
-          push((coord){tbwd, i, j, EVEN});
+          seen.pet_even[tbwd][i][j] = true;
+          q_push((coord_t){tbwd, i, j, EVEN});
         }
       }
       // LEFT
@@ -461,10 +494,12 @@ void flood_fill_pet(bool spin) {
         int j_lo = j/2;
         int i_l = ((i+j) % 2 == 0) ? i : wrap_i(i-1);
         if (!seen.pet_even[t][i][j_le]) {
-          push((coord){t, i, j_le, EVEN});
+          seen.pet_even[t][i][j_le] = true;
+          q_push((coord_t){t, i, j_le, EVEN});
         }
         if (!seen.pet_odd[t][i_l][j_lo]) {
-          push((coord){t, i_l, j_lo, ODD});
+          seen.pet_odd[t][i_l][j_lo] = true;
+          q_push((coord_t){t, i_l, j_lo, ODD});
         }
       }
       // RIGHT
@@ -473,10 +508,12 @@ void flood_fill_pet(bool spin) {
         int j_ro = wrap_dj(j+1)/2;
         int i_r = ((i+j) % 2 == 0) ? wrap_i(i-1) : i;
         if (!seen.pet_even[t][i][j_re]) {
-          push((coord){t, i, j_re, EVEN});
+          seen.pet_even[t][i][j_re] = true;
+          q_push((coord_t){t, i, j_re, EVEN});
         }
         if (!seen.pet_odd[t][i_r][j_ro]) {
-          push((coord){t, i_r, j_ro, ODD});
+          seen.pet_odd[t][i_r][j_ro] = true;
+          q_push((coord_t){t, i_r, j_ro, ODD});
         }
       }
       assert(!bond_u(bond));
@@ -484,8 +521,7 @@ void flood_fill_pet(bool spin) {
     }
     // odd petals
     else {
-      assert(!seen.pet_odd[t][i][j]);
-      seen.pet_odd[t][i][j] = true;
+      assert(seen.pet_odd[t][i][j]);
       int idx = ind_pet_odd(t, i, j);
       lattice[idx] = spin;
       int bond = bonds.pet_odd[t][i][j];
@@ -493,14 +529,16 @@ void flood_fill_pet(bool spin) {
       if (bond_tfwd(bond)) {
         int tfwd = wrap_t(t+1);
         if (!seen.pet_odd[tfwd][i][j]) {
-          push((coord){tfwd, i, j, ODD});
+          seen.pet_odd[tfwd][i][j] = true;
+          q_push((coord_t){tfwd, i, j, ODD});
         }
       }
       // TBWD
       if (bond_tbwd(bond)) {
         int tbwd = wrap_t(t-1);
         if (!seen.pet_odd[tbwd][i][j]) {
-          push((coord){tbwd, i, j, ODD});
+          seen.pet_odd[tbwd][i][j] = true;
+          q_push((coord_t){tbwd, i, j, ODD});
         }
       }
       // UP
@@ -508,10 +546,12 @@ void flood_fill_pet(bool spin) {
         int j_l = 2*j;
         int j_r = wrap_dj(2*j+1);
         if (!seen.pet_even[t][i][j_l]) {
-          push((coord){t, i, j_l, EVEN});
+          seen.pet_even[t][i][j_l] = true;
+          q_push((coord_t){t, i, j_l, EVEN});
         }
         if (!seen.pet_even[t][i][j_r]) {
-          push((coord){t, i, j_r, EVEN});
+          seen.pet_even[t][i][j_r] = true;
+          q_push((coord_t){t, i, j_r, EVEN});
         }
       }
       // DOWN
@@ -520,10 +560,12 @@ void flood_fill_pet(bool spin) {
         int j_r = wrap_dj(2*j+1);
         int i_d = wrap_i(i+1);
         if (!seen.pet_even[t][i_d][j_l]) {
-          push((coord){t, i_d, j_l, EVEN});
+          seen.pet_even[t][i_d][j_l] = true;
+          q_push((coord_t){t, i_d, j_l, EVEN});
         }
         if (!seen.pet_even[t][i_d][j_r]) {
-          push((coord){t, i_d, j_r, EVEN});
+          seen.pet_even[t][i_d][j_r] = true;
+          q_push((coord_t){t, i_d, j_r, EVEN});
         }
       }
       assert(!bond_l(bond));
@@ -542,7 +584,9 @@ void update_pet_spins() {
         if (seen.pet_even[t][i][j]) {
           continue;
         }
-        push((coord){t, i, j, EVEN});
+        seen.pet_even[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j, EVEN});
         flood_fill_pet(rand_bool());
       }
     }
@@ -554,15 +598,39 @@ void update_pet_spins() {
         if (seen.pet_odd[t][i][j]) {
           continue;
         }
-        push((coord){t, i, j, ODD});
+        seen.pet_odd[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j, ODD});
         flood_fill_pet(rand_bool());
       }
     }
   }
 }
 
+void write_lattice(FILE *f) {
+  assert(f != NULL);
+  fwrite(lattice, 1, sizeof(lattice), f);
+}
 
-int main() {
+typedef enum {
+  E_ARGS = 1,
+  E_OUT_FILE,
+} error_t;
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    printf("Usage: %s <out_file>\n", argv[0]);
+    return E_ARGS;
+  }
+  const char* fname = argv[1];
+  FILE *f = fopen(fname, "wb");
+  if (f == NULL) {
+    printf("Failed to open output file\n");
+    return E_OUT_FILE;
+  }
+
+  memset(lattice, 0xff, sizeof(lattice));
+  
   int n_iter = 100;
   srand(1234);
   init_cold();
@@ -573,5 +641,9 @@ int main() {
     // petal sublattice
     sample_pet_bonds();
     update_pet_spins();
+
+    write_lattice(f);
   }
+
+  fclose(f);
 }
