@@ -7,13 +7,13 @@
 #include <stdlib.h>
 
 #ifndef NROWS
-#define NROWS 4
+#define NROWS 2
 #endif
 #ifndef NCOLS
-#define NCOLS 4
+#define NCOLS 2
 #endif
 #ifndef NT
-#define NT 8
+#define NT 16
 #endif
 
 /// We can wastefully map the heavy hex into a rectangular grid. For example,
@@ -40,6 +40,26 @@
 #define ECOLS (4*NCOLS)
 typedef uint8_t spin_t;
 static spin_t lattice[NT * EROWS * ECOLS];
+
+#define FREE 0xff
+static spin_t frozen[NT * EROWS * ECOLS];
+
+static void init_frozen() {
+  // OBCs
+  for (int t = 0; t < NT; ++t) {
+    for (int x = 0; x < EROWS; ++x) {
+      for (int y = 0; y < ECOLS; ++y) {
+        int i = (t*EROWS + x)*ECOLS + y;
+        if (x == EROWS-1 || y >= ECOLS-3) {
+          frozen[i] = 0;
+        }
+        else {
+          frozen[i] = FREE;
+        }
+      }
+    }
+  }
+}
 
 static inline int ind_tri(int t, int i, int j) {
   assert(t < NT && i < NROWS && j < 2*NCOLS);
@@ -152,9 +172,12 @@ static inline double rand_double() {
 
 
 // couplings betaX = t J_x
-static double betaT = 1.0;
-static double betaP = 1.0;
-static double betaPP = 0.0;
+static const double dt = 0.1;
+static const double lambdaP = 1.0;
+static const double lambdaPP = 0.0;
+static const double betaT = dt;
+static const double betaP = dt * lambdaP;
+static const double betaPP = dt * lambdaPP;
 
 void init_cold() {
   for (int t = 0; t < NT; ++t) {
@@ -356,6 +379,24 @@ void flood_fill_tri(spin_t spin) {
 
 void update_tri_spins() {
   memset(seen.tri, 0, sizeof(seen.tri));
+  // outer loop, frozen
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (seen.tri[t][i][j]) {
+          continue;
+        }
+        if (frozen[ind_tri(t, i, j)] == FREE) {
+          continue;
+        }
+        seen.tri[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j});
+        flood_fill_tri(frozen[ind_tri(t, i, j)]);
+      }
+    }
+  }
+  // outer loop, unfrozen
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -577,7 +618,24 @@ void flood_fill_pet(spin_t spin) {
 void update_pet_spins() {
   memset(seen.pet_even, 0, sizeof(seen.pet_even));
   memset(seen.pet_odd, 0, sizeof(seen.pet_odd));
-  // outer loop even
+  // outer loop even, frozen
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (seen.pet_even[t][i][j]) {
+          continue;
+        }
+        if (frozen[ind_pet_even(t, i, j)] == FREE) {
+          continue;
+        }
+        seen.pet_even[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j, EVEN});
+        flood_fill_pet(frozen[ind_pet_even(t, i, j)]);
+      }
+    }
+  }
+  // outer loop even, unfrozen
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -591,7 +649,24 @@ void update_pet_spins() {
       }
     }
   }
-  // outer loop odd
+  // outer loop odd, frozen
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        if (seen.pet_odd[t][i][j]) {
+          continue;
+        }
+        if (frozen[ind_pet_odd(t, i, j)] == FREE) {
+          continue;
+        }
+        seen.pet_odd[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j, ODD});
+        flood_fill_pet(frozen[ind_pet_odd(t, i, j)]);
+      }
+    }
+  }
+  // outer loop odd, unfrozen
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
@@ -630,10 +705,13 @@ int main(int argc, char** argv) {
   }
 
   memset(lattice, 0xff, sizeof(lattice));
+  memset(frozen, 0xff, sizeof(frozen));
   
-  int n_iter = 100;
+  const int n_iter = 1000;
+  const int n_skip = 10;
   srand(1234);
   init_cold();
+  init_frozen();
   for (int i = 0; i < n_iter; ++i) {
     // triangle sublattice
     sample_tri_bonds();
@@ -642,7 +720,9 @@ int main(int argc, char** argv) {
     sample_pet_bonds();
     update_pet_spins();
 
-    write_lattice(f);
+    if ((i+1) % n_skip == 0) {
+      write_lattice(f);
+    }
   }
 
   fclose(f);
