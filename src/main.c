@@ -707,9 +707,9 @@ int main(int argc, char** argv) {
   memset(lattice, 0xff, sizeof(lattice));
   memset(frozen, 0xff, sizeof(frozen));
   
-  const int n_iter = 1000;
-  const int n_skip = 10;
-  srand(1234);
+  const int n_iter = 100000;
+  const int n_skip = 1;
+  srand(59263491);
   init_cold();
   init_frozen();
   for (int i = 0; i < n_iter; ++i) {
