@@ -13,7 +13,7 @@
 #define NCOLS 2
 #endif
 #ifndef NT
-#define NT 16
+#define NT 32
 #endif
 
 /// We can wastefully map the heavy hex into a rectangular grid. For example,
@@ -46,16 +46,25 @@ static spin_t frozen[NT * EROWS * ECOLS];
 
 static void init_frozen() {
   // OBCs
+  // for (int t = 0; t < NT; ++t) {
+  //   for (int x = 0; x < EROWS; ++x) {
+  //     for (int y = 0; y < ECOLS; ++y) {
+  //       int i = (t*EROWS + x)*ECOLS + y;
+  //       if (x == EROWS-1 || y >= ECOLS-3) {
+  //         frozen[i] = false;
+  //       }
+  //       else {
+  //         frozen[i] = FREE;
+  //       }
+  //     }
+  //   }
+  // }
+  // PBCS
   for (int t = 0; t < NT; ++t) {
     for (int x = 0; x < EROWS; ++x) {
       for (int y = 0; y < ECOLS; ++y) {
         int i = (t*EROWS + x)*ECOLS + y;
-        if (x == EROWS-1 || y >= ECOLS-3) {
-          frozen[i] = 0;
-        }
-        else {
-          frozen[i] = FREE;
-        }
+        frozen[i] = FREE;
       }
     }
   }
@@ -136,10 +145,10 @@ static struct {
 #define QUEUE_CAP (NT * NROWS * 3*NCOLS)
 typedef enum {
   ODD, EVEN
-} parity;
+} pet_parity;
 typedef struct {
   int t, i, j;
-  parity p;
+  pet_parity p;
 } coord_t;
 static struct {
   coord_t values[QUEUE_CAP];
@@ -171,13 +180,14 @@ static inline double rand_double() {
 }
 
 
-// couplings betaX = t J_x
-static const double dt = 0.1;
-static const double lambdaP = 1.0;
-static const double lambdaPP = 0.0;
+static const double dt = 0.2;
+// should match alessandro
+static const double lambdaP = 0.0;
+static const double lambdaE = -3.0;
+// derived couplings betaX = dt J_x
 static const double betaT = dt;
 static const double betaP = dt * lambdaP;
-static const double betaPP = dt * lambdaPP;
+static const double betaPP = dt * (lambdaE / 4.0);
 
 void init_cold() {
   for (int t = 0; t < NT; ++t) {
@@ -207,10 +217,15 @@ bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return false;
   }
-  double w1 = exp(-betaPP)*sinh(betaP) + delta_b*(exp(-betaPP-betaP) - exp(betaPP));
-  double w0 = delta_b*exp(betaPP);
-  assert(w1 >= 0 && w0 >= 0);
-  double p = w1 / (w1 + w0);
+  if (!delta_b) {
+    return true;
+  }
+  // double w1 = exp(-betaPP)*sinh(betaP) + delta_b*(exp(-betaPP-betaP) - exp(betaPP));
+  // double w0 = delta_b*exp(betaPP);
+  // assert(w1 >= 0 && w0 >= 0);
+  // double p = w1 / (w1 + w0);
+  double p = 1.0 - exp(2*betaPP) / cosh(betaP);
+  assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
 }
 
@@ -221,10 +236,12 @@ bool tri_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return true;
   }
-  double w1 = exp(-betaT);
-  double w0 = sinh(betaT);
-  assert(w1 >= 0 && w0 >= 0);
-  double p = w1 / (w1 + w0);
+  // double w1 = exp(-betaT);
+  // double w0 = sinh(betaT);
+  // assert(w1 >= 0 && w0 >= 0);
+  // double p = w1 / (w1 + w0);
+  double p = 1.0 - tanh(betaT);
+  assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
 }
 
@@ -232,10 +249,15 @@ bool pet_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return false;
   }
-  double w1 = sinh(betaT) + delta_a*(exp(-betaT) - 1.0);
-  double w0 = (double)delta_a;
-  assert(w1 >= 0 && w0 >= 0);
-  double p = w1 / (w1 + w0);
+  if (!delta_a) {
+    return true;
+  }
+  // double w1 = sinh(betaT) + exp(-betaT) - 1.0;
+  // double w0 = 1.0;
+  // assert(w1 >= 0 && w0 >= 0);
+  // double p = w1 / (w1 + w0);
+  double p = 1.0 - 1.0 / cosh(betaT);
+  assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
 }
 
@@ -246,10 +268,12 @@ bool pet_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return true;
   }
-  double w1 = exp(-betaPP-betaP);
-  double w0 = exp(-betaPP)*sinh(betaP);
-  assert(w1 >= 0 && w0 >= 0);
-  double p = w1 / (w1 + w0);
+  // double w1 = exp(-betaPP-betaP);
+  // double w0 = exp(-betaPP)*sinh(betaP);
+  // assert(w1 >= 0 && w0 >= 0);
+  // double p = w1 / (w1 + w0);
+  double p = 1.0 - tanh(betaP);
+  assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
 }
 
@@ -703,16 +727,19 @@ int main(int argc, char** argv) {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
-
+  
   memset(lattice, 0xff, sizeof(lattice));
   memset(frozen, 0xff, sizeof(frozen));
   
   const int n_iter = 100000;
-  const int n_skip = 1;
+  const int n_skip = 100;
   srand(59263491);
   init_cold();
   init_frozen();
   for (int i = 0; i < n_iter; ++i) {
+    if ((i+1) % 1000 == 0) {
+      printf("Iter %d / %d\n", i+1, n_iter);
+    }
     // triangle sublattice
     sample_tri_bonds();
     update_tri_spins();

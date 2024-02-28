@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-std=c99
 CFLAGS_DBG=-O0 -g $(CFLAGS)
-CFLAGS_REL=-O3 $(CFLAGS)
+CFLAGS_REL=-O3 -DNDEBUG $(CFLAGS)
 LDFLAGS=-lm
 SRCDIR=src
 SRCS=$(addprefix ${SRCDIR}/,main.c)
