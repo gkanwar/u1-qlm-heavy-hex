@@ -17,6 +17,7 @@
 import itertools
 import numpy as np
 import tqdm
+from typing import Optional
 
 '''
 # variables in matrix order in the geometry drawn above
@@ -78,6 +79,7 @@ def count_1hex():
 def count_2hex(counts_1hex):
     # assume hexagons A and B are glued together such that y1A == y6B
     counts: dict[tuple[int,...], int] = {}
+    keyA: tuple[int,...]
     for keyA, countA in tqdm.tqdm(counts_1hex.items()):
         petal_AB = keyA[5]
         outer_keyA = (keyA[0], keyA[1], keyA[2], keyA[3], keyA[4])
@@ -85,6 +87,7 @@ def count_2hex(counts_1hex):
         ext = outer_keyA[0]
         if not all_equal_to(outer_keyA, ext):
             continue
+        keyB: tuple[int,...]
         for keyB, countB in counts_1hex.items():
             petal_BA = keyB[0]
             dAB = petal_AB - petal_BA
@@ -92,6 +95,7 @@ def count_2hex(counts_1hex):
             # FORNOW: specialize for no external flux
             if not all_equal_to(outer_keyB, ext):
                 continue
+            key: tuple[int,...]
             key = outer_keyA + outer_keyB
             if key not in counts:
                 counts[key] = 0
@@ -176,6 +180,57 @@ def count_3hex_v2(counts_1hex):
                 counts[key] += countA * countB * countC
     return counts
 
+def valid_adjacency(adj):
+    for i,neighbors in adj.items():
+        for j in neighbors:
+            if i not in adj[j]:
+                return False
+    return True
+
+# TODO: hex_adjacency and fixed_values can be packed into one structure, because
+# they take the value None in complementary cases.
+def count_generic(
+        counts_1hex, hexes: list[str], hex_adjacency: dict[str, list[Optional[str]]],
+        fixed_values: dict[str, list[Optional[int]]]):
+    assert valid_adjacency(hex_adjacency)
+    tot = 0
+    first: str = hexes[0]
+    adj_first: list[Optional[str]]
+    fixed_first: list[Optional[int]]
+    adj_first = hex_adjacency[first]
+    fixed_first = fixed_values[first]
+
+    # base case
+    if len(hexes) == 1:
+        assert not any(x is None for x in fixed_first)
+        key = tuple(fixed_first)
+        return counts_1hex.get(key, 0)
+
+    # recursive case
+    it = tqdm.tqdm(counts_1hex.items(), position=len(hexes)-1, leave=False, desc=first)
+    for key, count in it:
+        offset = None
+        assert len(fixed_first) == len(key)
+        skip = False
+        for value, fixed in zip(key, fixed_first):
+            if fixed is not None:
+                if offset is None:
+                    offset = fixed - value
+                if value + offset != fixed:
+                    skip = True
+                    break
+        if skip: continue
+        assert offset is not None, 'must pass hexes ordered from boundary to interior'
+        # NOTE: this hex always fixes the same values, so no need to undo this
+        for i,neighbor in enumerate(adj_first):
+            if neighbor not in hexes or neighbor is None:
+                assert fixed_first[i] is not None
+                continue
+            ind = hex_adjacency[neighbor].index(first)
+            fixed_values[neighbor][ind] = key[i] + offset
+        tot += count * count_generic(counts_1hex, hexes[1:], hex_adjacency, fixed_values)
+    return tot
+
 def all_equal_to(tup, value):
     return tup == (value,) * len(tup)
 def all_equal(tup):
@@ -207,6 +262,20 @@ if __name__ == '__main__':
     print(f'num keys = {len(counts_2hex)}')
     print(f'total = {sum(counts_2hex.values())}')
     print(f'open = {count_open(counts_2hex)}')
+
+    generic_2hex = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, None, None, None],
+            'B': [None, None, None, None, None, 'A'],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, env, env, env],
+            'B': [env, env, env, env, env, None],
+        }
+        generic_2hex += count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+    print(f'open (generic) = {generic_2hex}')
     
     counts_3hex = count_3hex_v1(counts_1hex)
     print(f'== 3 Hexagons (triangle) ==')
@@ -214,8 +283,140 @@ if __name__ == '__main__':
     print(f'total = {sum(counts_3hex.values())}')
     print(f'open = {count_open(counts_3hex)}')
 
+    generic_3hex = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, 'C', None, None],
+            'B': [None, None, None, None, 'C', 'A'],
+            'C': [None, 'B', 'A', None, None, None],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, None, env, env],
+            'B': [env, env, env, env, None, None],
+            'C': [env, None, None, env, env, env]
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic_3hex += count_env
+    print(f'open (generic) = {generic_3hex}')
+
     counts_3hex = count_3hex_v2(counts_1hex)
     print(f'== 3 Hexagons (line) ==')
     print(f'num keys = {len(counts_3hex)}')
     print(f'total = {sum(counts_3hex.values())}')
     print(f'open = {count_open(counts_3hex)}')
+
+    generic_3hex = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, None, None, None],
+            'B': [None, None, None, 'C', None, 'A'],
+            'C': [None, None, 'B', None, None, None],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, env, env, env],
+            'B': [env, env, env, None, env, None],
+            'C': [env, env, None, env, env, env]
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic_3hex += count_env
+    print(f'open (generic) = {generic_3hex}')
+
+    print(f'== 4 Hexagons (rhombus) ==')
+    generic = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C', 'D']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, 'C', None, None],
+            'B': [None, None, None, 'D', 'C', 'A'],
+            'C': ['D', 'B', 'A', None, None, None],
+            'D': [None, None, 'B', None, None, 'C'],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, None, env, env],
+            'B': [env, env, env, None, None, None],
+            'C': [None, None, None, env, env, env],
+            'D': [env, env, None, env, env, None],
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic += count_env
+    print(f'open (generic) = {generic}')
+
+    print(f'== 5 Hexagons (trapezoid) ==')
+    generic = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C', 'E', 'D']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, 'C', None, None],
+            'B': [None, None, None, 'D', 'C', 'A'],
+            'C': ['D', 'B', 'A', 'E', None, None],
+            'D': [None, None, 'B', None, 'E', 'C'],
+            'E': [None, 'D', 'C', None, None, None],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, None, env, env],
+            'B': [env, env, env, None, None, None],
+            'C': [None, None, None, None, env, env],
+            'D': [env, env, None, env, None, None],
+            'E': [env, None, None, env, env, env],
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic += count_env
+    print(f'open (generic) = {generic}')
+
+    print(f'== 6 Hexagons (crescent) ==')
+    generic = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C', 'E', 'F', 'D']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, 'C', None, None],
+            'B': [None, None, None, 'D', 'C', 'A'],
+            'C': ['D', 'B', 'A', 'E', 'F', None],
+            'D': [None, None, 'B', None, 'E', 'C'],
+            'E': [None, 'D', 'C', None, None, 'F'],
+            'F': ['E', 'C', None, None, None, None],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, None, env, env],
+            'B': [env, env, env, None, None, None],
+            'C': [None, None, None, None, None, env],
+            'D': [env, env, None, env, None, None],
+            'E': [env, None, None, env, env, None],
+            'F': [None, None, env, env, env, env],
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic += count_env
+    print(f'open (generic) = {generic}')
+
+    print(f'== 7 Hexagons (hex) ==')
+    generic = 0
+    for env in [-1, 1]:
+        hexes = ['A', 'B', 'C', 'E', 'F', 'G', 'D']
+        hex_adj: dict[str, list[Optional[str]]] = {
+            'A': ['B', None, None, 'C', 'G', None],
+            'B': [None, None, None, 'D', 'C', 'A'],
+            'C': ['D', 'B', 'A', 'E', 'F', 'G'],
+            'D': [None, None, 'B', None, 'E', 'C'],
+            'E': [None, 'D', 'C', None, None, 'F'],
+            'F': ['E', 'C', 'G', None, None, None],
+            'G': ['C', 'A', None, 'F', None, None],
+        }
+        fixed_values: dict[str, list[Optional[int]]] = {
+            'A': [None, env, env, None, None, env],
+            'B': [env, env, env, None, None, None],
+            'C': [None, None, None, None, None, None],
+            'D': [env, env, None, env, None, None],
+            'E': [env, None, None, env, env, None],
+            'F': [None, None, None, env, env, env],
+            'G': [None, None, env, None, env, env],
+        }
+        count_env = count_generic(counts_1hex, hexes, hex_adj, fixed_values)
+        print(f'... {env} -> {count_env}')
+        generic += count_env
+    print(f'open (generic) = {generic}')
