@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
 
 #ifndef NROWS
 #define NROWS 2
@@ -13,13 +15,27 @@
 #define NCOLS 2
 #endif
 #ifndef NT
-#define NT 32
+#define NT 64
 #endif
+
+static const double dt = 0.1;
+static const double KP = 1.0;
+static const double KE = 1.0;
+// derived couplings betaX = dt K_x
+static const double betaT = dt;
+static const double betaP = dt * KP;
+static const double betaE = dt * KE;
+
+
+// settings for debugging
+#define ENABLE_PET_SPATIAL 1
+#define ENABLE_TRI_SPATIAL 1
+
 
 /// We can wastefully map the heavy hex into a rectangular grid. For example,
 /// for NROWS = 2 and NCOLS = 2, we have the following periodic geometry:
 /// o-x-o-x-o-x-o-x-
-/// x       x       
+/// x       x
 /// o-x-o-x-o-x-o-x-
 ///     x       x
 ///
@@ -42,30 +58,27 @@ typedef uint8_t spin_t;
 static spin_t lattice[NT * EROWS * ECOLS];
 
 #define FREE 0xff
-static spin_t frozen[NT * EROWS * ECOLS];
+static spin_t fixed[EROWS * ECOLS];
 
-static void init_frozen() {
-  // OBCs
-  // for (int t = 0; t < NT; ++t) {
-  //   for (int x = 0; x < EROWS; ++x) {
-  //     for (int y = 0; y < ECOLS; ++y) {
-  //       int i = (t*EROWS + x)*ECOLS + y;
-  //       if (x == EROWS-1 || y >= ECOLS-3) {
-  //         frozen[i] = false;
-  //       }
-  //       else {
-  //         frozen[i] = FREE;
-  //       }
-  //     }
-  //   }
-  // }
-  // PBCS
-  for (int t = 0; t < NT; ++t) {
-    for (int x = 0; x < EROWS; ++x) {
-      for (int y = 0; y < ECOLS; ++y) {
-        int i = (t*EROWS + x)*ECOLS + y;
-        frozen[i] = FREE;
+static void init_fixed_obc() {
+  for (int x = 0; x < EROWS; ++x) {
+    for (int y = 0; y < ECOLS; ++y) {
+      int i = x*ECOLS + y;
+      if (x == EROWS-1 || y >= ECOLS-3) {
+        fixed[i] = false;
       }
+      else {
+        fixed[i] = FREE;
+      }
+    }
+  }
+}
+
+static void init_fixed_pbc() {
+  for (int x = 0; x < EROWS; ++x) {
+    for (int y = 0; y < ECOLS; ++y) {
+      int i = x*ECOLS + y;
+      fixed[i] = FREE;
     }
   }
 }
@@ -86,9 +99,9 @@ static inline int ind_pet_odd(int t, int i, int j) {
 static inline int wrap_i(int i) {
   return (NROWS+i) % NROWS;
 }
-static inline int wrap_sj(int j) {
-  return (NCOLS+j) % NCOLS;
-}
+// static inline int wrap_sj(int j) {
+//   return (NCOLS+j) % NCOLS;
+// }
 static inline int wrap_dj(int j) {
   return (2*NCOLS+j) % (2*NCOLS);
 }
@@ -107,30 +120,30 @@ typedef enum {
   T_BWD,
   T_FWD
 } bond_bit;
-typedef uint8_t bond_t;
-static inline bool bond_d(bond_t x) {
+typedef uint8_t bond_dirs_t;
+static inline bool bond_d(bond_dirs_t x) {
   return (x >> DOWN) & 1;
 }
-static inline bool bond_u(bond_t x) {
+static inline bool bond_u(bond_dirs_t x) {
   return (x >> UP) & 1;
 }
-static inline bool bond_r(bond_t x) {
+static inline bool bond_r(bond_dirs_t x) {
   return (x >> RIGHT) & 1;
 }
-static inline bool bond_l(bond_t x) {
+static inline bool bond_l(bond_dirs_t x) {
   return (x >> LEFT) & 1;
 }
-static inline bool bond_tbwd(bond_t x) {
+static inline bool bond_tbwd(bond_dirs_t x) {
   return (x >> T_BWD) & 1;
 }
-static inline bool bond_tfwd(bond_t x) {
+static inline bool bond_tfwd(bond_dirs_t x) {
   return (x >> T_FWD) & 1;
 }
 
 static struct {
-  bond_t tri[NT][NROWS][2*NCOLS];
-  bond_t pet_even[NT][NROWS][2*NCOLS];
-  bond_t pet_odd[NT][NROWS][NCOLS];
+  bond_dirs_t tri[NT][NROWS][2*NCOLS];
+  bond_dirs_t pet_even[NT][NROWS][2*NCOLS];
+  bond_dirs_t pet_odd[NT][NROWS][NCOLS];
 } bonds;
 
 static struct {
@@ -180,16 +193,7 @@ static inline double rand_double() {
 }
 
 
-static const double dt = 0.2;
-// should match alessandro
-static const double lambdaP = 0.0;
-static const double lambdaE = -3.0;
-// derived couplings betaX = dt J_x
-static const double betaT = dt;
-static const double betaP = dt * lambdaP;
-static const double betaPP = dt * (lambdaE / 4.0);
-
-void init_cold() {
+void init_lat_cold() {
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -213,6 +217,68 @@ void init_cold() {
   }
 }
 
+void init_lat_hot_tri() {
+  init_lat_cold();
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_tri(t, i, j)] = rand_bool();
+      }
+    }
+  }
+}
+
+void init_lat_hot_petal() {
+  init_lat_cold();
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_pet_even(t, i, j)] = rand_bool();
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        lattice[ind_pet_odd(t, i, j)] = rand_bool();
+      }
+    }
+  }
+}
+
+void init_lat_apply_fixed() {
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        spin_t value = fixed[ind_tri(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_tri(t, i, j)] = value;
+        }
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        spin_t value = fixed[ind_pet_even(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_pet_even(t, i, j)] = value;
+        }
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        spin_t value = fixed[ind_pet_odd(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_pet_odd(t, i, j)] = value;
+        }
+      }
+    }
+  }
+}
+
 bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return false;
@@ -220,11 +286,7 @@ bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return true;
   }
-  // double w1 = exp(-betaPP)*sinh(betaP) + delta_b*(exp(-betaPP-betaP) - exp(betaPP));
-  // double w0 = delta_b*exp(betaPP);
-  // assert(w1 >= 0 && w0 >= 0);
-  // double p = w1 / (w1 + w0);
-  double p = 1.0 - exp(2*betaPP) / cosh(betaP);
+  double p = 1.0 - exp(-2*betaE) / cosh(betaP);
   assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
 }
@@ -236,10 +298,6 @@ bool tri_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return true;
   }
-  // double w1 = exp(-betaT);
-  // double w0 = sinh(betaT);
-  // assert(w1 >= 0 && w0 >= 0);
-  // double p = w1 / (w1 + w0);
   double p = 1.0 - tanh(betaT);
   assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
@@ -252,10 +310,6 @@ bool pet_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return true;
   }
-  // double w1 = sinh(betaT) + exp(-betaT) - 1.0;
-  // double w0 = 1.0;
-  // assert(w1 >= 0 && w0 >= 0);
-  // double p = w1 / (w1 + w0);
   double p = 1.0 - 1.0 / cosh(betaT);
   assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
@@ -268,10 +322,6 @@ bool pet_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return true;
   }
-  // double w1 = exp(-betaPP-betaP);
-  // double w0 = exp(-betaPP)*sinh(betaP);
-  // assert(w1 >= 0 && w0 >= 0);
-  // double p = w1 / (w1 + w0);
   double p = 1.0 - tanh(betaP);
   assert(0.0 <= p && p <= 1.0);
   return rand_double() < p;
@@ -290,12 +340,15 @@ void sample_tri_bonds() {
         int j_r = wrap_dj(j+1);
         bool tri_l = lattice[ind_tri(t, i, j_l)];
         bool tri_r = lattice[ind_tri(t, i, j_r)];
-        int tri_i_ud = wrap_i(((i+j) % 2 == 0) ? i+1 : i-1);
-        int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
-        bond_bit UD = ((i+j) % 2 == 0) ? DOWN : UP;
-        bond_bit FLIP_UD = ((i+j) % 2 == 0) ? UP : DOWN;
+        // even triangles have a downwards neighbor, while
+        // odd triangles have an upwards neighbor
+        bool even_site = (i+j) % 2 == 0;
+        int tri_i_ud = wrap_i(even_site ? i+1 : i-1);
+        int pet_i_ud = wrap_i(even_site ? i : i-1);
+        bond_bit UD = even_site ? DOWN : UP;
+        bond_bit FLIP_UD = even_site ? UP : DOWN;
         bool tri_ud = lattice[ind_tri(t, tri_i_ud, j)];
-        
+
         // relevant petals
         int j_odd = j/2;
         bool pet_bwd_l = lattice[ind_pet_even(t, i, j_l)];
@@ -304,6 +357,9 @@ void sample_tri_bonds() {
         bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
         bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
         bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+        bool pet_l_fixed = fixed[ind_pet_even(0, i, j_l)] != FREE;
+        bool pet_r_fixed = fixed[ind_pet_even(0, i, j)] != FREE;
+        bool pet_ud_fixed = fixed[ind_pet_odd(0, pet_i_ud, j_odd)] != FREE;
 
         // bonds
         // T_FWD / T_BWD
@@ -315,32 +371,32 @@ void sample_tri_bonds() {
             bonds.tri[t_fwd][i][j] |= 1 << T_BWD;
           }
         }
-        if (i+j % 2 != 0) {
+        if (!even_site) {
           continue;
         }
         // UP / DOWN
-        {
+        if (ENABLE_TRI_SPATIAL) {
           bool delta_a = (tri == tri_ud);
           bool delta_b = (pet_fwd_ud == pet_bwd_ud);
-          if (tri_bond_spatial(delta_a, delta_b)) {
+          if (!pet_ud_fixed && tri_bond_spatial(delta_a, delta_b)) {
             bonds.tri[t][i][j] |= 1 << UD;
             bonds.tri[t][tri_i_ud][j] |= 1 << FLIP_UD;
           }
         }
         // RIGHT
-        {
+        if (ENABLE_TRI_SPATIAL) {
           bool delta_a = (tri == tri_r);
           bool delta_b = (pet_fwd_r == pet_bwd_r);
-          if (tri_bond_spatial(delta_a, delta_b)) {
+          if (!pet_r_fixed && tri_bond_spatial(delta_a, delta_b)) {
             bonds.tri[t][i][j] |= 1 << RIGHT;
             bonds.tri[t][i][j_r] |= 1 << LEFT;
           }
         }
         // LEFT
-        {
+        if (ENABLE_TRI_SPATIAL) {
           bool delta_a = (tri == tri_l);
           bool delta_b = (pet_fwd_l == pet_bwd_l);
-          if (tri_bond_spatial(delta_a, delta_b)) {
+          if (!pet_l_fixed && tri_bond_spatial(delta_a, delta_b)) {
             bonds.tri[t][i][j] |= 1 << LEFT;
             bonds.tri[t][i][j_l] |= 1 << RIGHT;
           }
@@ -350,16 +406,16 @@ void sample_tri_bonds() {
   }
 }
 
+// flood fill expanding from sites already pushed on the queue
 void flood_fill_tri(spin_t spin) {
   while (!q_empty()) {
     coord_t x = q_pop();
     int t = x.t, i = x.i, j = x.j;
     assert(seen.tri[t][i][j]);
-    int idx = ind_tri(t, i, j);
-    lattice[idx] = spin;
-    bond_t bond = bonds.tri[t][i][j];
+    lattice[ind_tri(t, i, j)] = spin;
+    bond_dirs_t bond_dirs = bonds.tri[t][i][j];
     // TFWD
-    if (bond_tfwd(bond)) {
+    if (bond_tfwd(bond_dirs)) {
       int tfwd = wrap_t(t+1);
       if (!seen.tri[tfwd][i][j]) {
         seen.tri[tfwd][i][j] = true;
@@ -367,7 +423,7 @@ void flood_fill_tri(spin_t spin) {
       }
     }
     // TBWD
-    if (bond_tbwd(bond)) {
+    if (bond_tbwd(bond_dirs)) {
       int tbwd = wrap_t(t-1);
       if (!seen.tri[tbwd][i][j]) {
         seen.tri[tbwd][i][j] = true;
@@ -375,7 +431,7 @@ void flood_fill_tri(spin_t spin) {
       }
     }
     // LEFT
-    if (bond_l(bond)) {
+    if (bond_l(bond_dirs)) {
       int j_l = wrap_dj(j-1);
       if (!seen.tri[t][i][j_l]) {
         seen.tri[t][i][j_l] = true;
@@ -383,16 +439,17 @@ void flood_fill_tri(spin_t spin) {
       }
     }
     // RIGHT
-    if (bond_r(bond)) {
-      int j_r = wrap_dj(j-1);
+    if (bond_r(bond_dirs)) {
+      int j_r = wrap_dj(j+1);
       if (!seen.tri[t][i][j_r]) {
         seen.tri[t][i][j_r] = true;
         q_push((coord_t){t, i, j_r});
       }
     }
     // UP/DOWN
-    if (bond_u(bond) || bond_d(bond)) {
-      int i_ud = wrap_i(((i+j) % 2 == 0) ? i+1 : i-1);
+    if (bond_u(bond_dirs) || bond_d(bond_dirs)) {
+      bool even_site = (i+j) % 2 == 0;
+      int i_ud = wrap_i(even_site ? i+1 : i-1);
       if (!seen.tri[t][i_ud][j]) {
         seen.tri[t][i_ud][j] = true;
         q_push((coord_t){t, i_ud, j});
@@ -403,24 +460,25 @@ void flood_fill_tri(spin_t spin) {
 
 void update_tri_spins() {
   memset(seen.tri, 0, sizeof(seen.tri));
-  // outer loop, frozen
+  // outer loop, fixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
         if (seen.tri[t][i][j]) {
           continue;
         }
-        if (frozen[ind_tri(t, i, j)] == FREE) {
+        if (fixed[ind_tri(0, i, j)] == FREE) {
           continue;
         }
         seen.tri[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j});
-        flood_fill_tri(frozen[ind_tri(t, i, j)]);
+        flood_fill_tri(fixed[ind_tri(0, i, j)]);
+        assert(q_empty());
       }
     }
   }
-  // outer loop, unfrozen
+  // outer loop, unfixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -431,6 +489,7 @@ void update_tri_spins() {
         assert(q_empty());
         q_push((coord_t){t, i, j});
         flood_fill_tri(rand_bool());
+        assert(q_empty());
       }
     }
   }
@@ -447,18 +506,18 @@ void sample_pet_bonds() {
         bool pet = lattice[ind_pet_even(t, i, j)];
         int t_fwd = wrap_t(t+1);
         bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
-        int j_l = j;
-        int j_r = wrap_dj(j+1);
 
         // relevant triangles
-        bool tri_l = lattice[ind_tri(t, i, j_l)];
-        bool tri_r = lattice[ind_tri(t, i, j_r)];
+        int j_l = j;
+        int j_r = wrap_dj(j+1);
+        bool tri_fwd_l = lattice[ind_tri(t, i, j_l)];
+        bool tri_fwd_r = lattice[ind_tri(t, i, j_r)];
 
         // bonds
         // T_FWD / T_BWD
         {
           bool delta_b = (pet == pet_fwd);
-          bool delta_a = (tri_l == tri_r);
+          bool delta_a = (tri_fwd_l == tri_fwd_r);
           if (pet_bond_temporal(delta_a, delta_b)) {
             bonds.pet_even[t][i][j] |= 1 << T_FWD;
             bonds.pet_even[t_fwd][i][j] |= 1 << T_BWD;
@@ -487,36 +546,38 @@ void sample_pet_bonds() {
         bool pet_dl = lattice[ind_pet_even(t, i_d, j_even_l)];
 
         // relevant triangles
-        bool tri_u = lattice[ind_tri(t, i_u, j_even)];
-        bool tri_d = lattice[ind_tri(t, i_d, j_even)];
+        bool tri_fwd_u = lattice[ind_tri(t, i_u, j_even)];
+        bool tri_fwd_d = lattice[ind_tri(t, i_d, j_even)];
         bool tri_bwd_u = lattice[ind_tri(t_bwd, i_u, j_even)];
         bool tri_bwd_d = lattice[ind_tri(t_bwd, i_d, j_even)];
+        bool tri_u_fixed = fixed[ind_tri(0, i_u, j_even)] != FREE;
+        bool tri_d_fixed = fixed[ind_tri(0, i_d, j_even)] != FREE;
 
         // bonds
         // T_FWD / T_BWD
         {
           bool delta_b = (pet == pet_fwd);
-          bool delta_a = (tri_u == tri_d);
+          bool delta_a = (tri_fwd_u == tri_fwd_d);
           if (pet_bond_temporal(delta_a, delta_b)) {
             bonds.pet_odd[t][i][j] |= 1 << T_FWD;
             bonds.pet_odd[t_fwd][i][j] |= 1 << T_BWD;
           }
         }
-        // UP
-        {
+        // UP (3-way)
+        if (ENABLE_PET_SPATIAL) {
           bool delta_b = (pet == pet_ur && pet_ur == pet_ul);
-          bool delta_a = (tri_u == tri_bwd_u);
-          if (pet_bond_spatial(delta_a, delta_b)) {
+          bool delta_a = (tri_fwd_u == tri_bwd_u);
+          if (!tri_u_fixed && pet_bond_spatial(delta_a, delta_b)) {
             bonds.pet_odd[t][i][j] |= 1 << UP;
             bonds.pet_even[t][i_u][j_even_r] |= 1 << LEFT;
             bonds.pet_even[t][i_u][j_even_l] |= 1 << RIGHT;
           }
         }
-        // DOWN
-        {
+        // DOWN (3-way)
+        if (ENABLE_PET_SPATIAL) {
           bool delta_b = (pet == pet_dr && pet_dr == pet_dl);
-          bool delta_a = (tri_d == tri_bwd_d);
-          if (pet_bond_spatial(delta_a, delta_b)) {
+          bool delta_a = (tri_fwd_d == tri_bwd_d);
+          if (!tri_d_fixed && pet_bond_spatial(delta_a, delta_b)) {
             bonds.pet_odd[t][i][j] |= 1 << DOWN;
             bonds.pet_even[t][i_d][j_even_r] |= 1 << LEFT;
             bonds.pet_even[t][i_d][j_even_l] |= 1 << RIGHT;
@@ -527,6 +588,7 @@ void sample_pet_bonds() {
   }
 }
 
+// flood fill expanding from sites already pushed on the queue
 void flood_fill_pet(spin_t spin) {
   while (!q_empty()) {
     coord_t x = q_pop();
@@ -534,11 +596,10 @@ void flood_fill_pet(spin_t spin) {
     // even petals
     if (x.p == EVEN) {
       assert(seen.pet_even[t][i][j]);
-      int idx = ind_pet_even(t, i, j);
-      lattice[idx] = spin;
-      int bond = bonds.pet_even[t][i][j];
+      lattice[ind_pet_even(t, i, j)] = spin;
+      bond_dirs_t bond_dirs = bonds.pet_even[t][i][j];
       // TFWD
-      if (bond_tfwd(bond)) {
+      if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
         if (!seen.pet_even[tfwd][i][j]) {
           seen.pet_even[tfwd][i][j] = true;
@@ -546,15 +607,15 @@ void flood_fill_pet(spin_t spin) {
         }
       }
       // TBWD
-      if (bond_tbwd(bond)) {
+      if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
         if (!seen.pet_even[tbwd][i][j]) {
           seen.pet_even[tbwd][i][j] = true;
           q_push((coord_t){tbwd, i, j, EVEN});
         }
       }
-      // LEFT
-      if (bond_l(bond)) {
+      // LEFT (3-way)
+      if (bond_l(bond_dirs)) {
         int j_le = wrap_dj(j-1);
         int j_lo = j/2;
         int i_l = ((i+j) % 2 == 0) ? i : wrap_i(i-1);
@@ -567,8 +628,8 @@ void flood_fill_pet(spin_t spin) {
           q_push((coord_t){t, i_l, j_lo, ODD});
         }
       }
-      // RIGHT
-      if (bond_r(bond)) {
+      // RIGHT (3-way)
+      if (bond_r(bond_dirs)) {
         int j_re = wrap_dj(j+1);
         int j_ro = wrap_dj(j+1)/2;
         int i_r = ((i+j) % 2 == 0) ? wrap_i(i-1) : i;
@@ -581,17 +642,16 @@ void flood_fill_pet(spin_t spin) {
           q_push((coord_t){t, i_r, j_ro, ODD});
         }
       }
-      assert(!bond_u(bond));
-      assert(!bond_d(bond));
+      assert(!bond_u(bond_dirs));
+      assert(!bond_d(bond_dirs));
     }
     // odd petals
     else {
       assert(seen.pet_odd[t][i][j]);
-      int idx = ind_pet_odd(t, i, j);
-      lattice[idx] = spin;
-      int bond = bonds.pet_odd[t][i][j];
+      lattice[ind_pet_odd(t, i, j)] = spin;
+      bond_dirs_t bond_dirs = bonds.pet_odd[t][i][j];
       // TFWD
-      if (bond_tfwd(bond)) {
+      if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
         if (!seen.pet_odd[tfwd][i][j]) {
           seen.pet_odd[tfwd][i][j] = true;
@@ -599,17 +659,18 @@ void flood_fill_pet(spin_t spin) {
         }
       }
       // TBWD
-      if (bond_tbwd(bond)) {
+      if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
         if (!seen.pet_odd[tbwd][i][j]) {
           seen.pet_odd[tbwd][i][j] = true;
           q_push((coord_t){tbwd, i, j, ODD});
         }
       }
-      // UP
-      if (bond_u(bond)) {
-        int j_l = 2*j;
-        int j_r = wrap_dj(2*j+1);
+      // UP (3-way)
+      if (bond_u(bond_dirs)) {
+        bool even_row = i % 2 == 0;
+        int j_r = wrap_dj(2*j + (even_row ? 0 : 1));
+        int j_l = wrap_dj(j_r-1);
         if (!seen.pet_even[t][i][j_l]) {
           seen.pet_even[t][i][j_l] = true;
           q_push((coord_t){t, i, j_l, EVEN});
@@ -619,10 +680,11 @@ void flood_fill_pet(spin_t spin) {
           q_push((coord_t){t, i, j_r, EVEN});
         }
       }
-      // DOWN
-      if (bond_d(bond)) {
-        int j_l = 2*j;
-        int j_r = wrap_dj(2*j+1);
+      // DOWN (3-way)
+      if (bond_d(bond_dirs)) {
+        bool even_row = i % 2 == 0;
+        int j_r = wrap_dj(2*j + (even_row ? 0 : 1));
+        int j_l = wrap_dj(j_r-1);
         int i_d = wrap_i(i+1);
         if (!seen.pet_even[t][i_d][j_l]) {
           seen.pet_even[t][i_d][j_l] = true;
@@ -633,8 +695,8 @@ void flood_fill_pet(spin_t spin) {
           q_push((coord_t){t, i_d, j_r, EVEN});
         }
       }
-      assert(!bond_l(bond));
-      assert(!bond_r(bond));
+      assert(!bond_l(bond_dirs));
+      assert(!bond_r(bond_dirs));
     }
   }
 }
@@ -642,24 +704,25 @@ void flood_fill_pet(spin_t spin) {
 void update_pet_spins() {
   memset(seen.pet_even, 0, sizeof(seen.pet_even));
   memset(seen.pet_odd, 0, sizeof(seen.pet_odd));
-  // outer loop even, frozen
+  // outer loop even, fixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
         if (seen.pet_even[t][i][j]) {
           continue;
         }
-        if (frozen[ind_pet_even(t, i, j)] == FREE) {
+        if (fixed[ind_pet_even(0, i, j)] == FREE) {
           continue;
         }
         seen.pet_even[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(frozen[ind_pet_even(t, i, j)]);
+        flood_fill_pet(fixed[ind_pet_even(0, i, j)]);
+        assert(q_empty());
       }
     }
   }
-  // outer loop even, unfrozen
+  // outer loop even, unfixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -670,27 +733,29 @@ void update_pet_spins() {
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
         flood_fill_pet(rand_bool());
+        assert(q_empty());
       }
     }
   }
-  // outer loop odd, frozen
+  // outer loop odd, fixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
         if (seen.pet_odd[t][i][j]) {
           continue;
         }
-        if (frozen[ind_pet_odd(t, i, j)] == FREE) {
+        if (fixed[ind_pet_odd(0, i, j)] == FREE) {
           continue;
         }
         seen.pet_odd[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        flood_fill_pet(frozen[ind_pet_odd(t, i, j)]);
+        flood_fill_pet(fixed[ind_pet_odd(0, i, j)]);
+        assert(q_empty());
       }
     }
   }
-  // outer loop odd, unfrozen
+  // outer loop odd, unfixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
@@ -701,9 +766,102 @@ void update_pet_spins() {
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
         flood_fill_pet(rand_bool());
+        assert(q_empty());
       }
     }
   }
+}
+
+void measure_HP_HE(double* HP, double* HE) {
+  int tot_HP = 0;
+  int tot_HE = 0;
+  // even petals
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (fixed[ind_pet_even(0, i, j)] != FREE) {
+          continue;
+        }
+        // relevant petals
+        bool pet = lattice[ind_pet_even(t, i, j)];
+        int t_fwd = wrap_t(t+1);
+        bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
+        int j_l = j;
+        int j_r = wrap_dj(j+1);
+
+        // relevant triangles
+        bool tri_l = lattice[ind_tri(t, i, j_l)];
+        bool tri_r = lattice[ind_tri(t, i, j_r)];
+
+        bool delta_b = (pet == pet_fwd);
+        bool delta_a = (tri_l == tri_r);
+
+        tot_HP += (!delta_b) && delta_a;
+        tot_HE += 2*delta_a - 1;
+      }
+    }
+  }
+  // odd petals
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        if (fixed[ind_pet_odd(0, i, j)] != FREE) {
+          continue;
+        }
+        // relevant petals
+        bool pet = lattice[ind_pet_odd(t, i, j)];
+        int t_fwd = wrap_t(t+1);
+        bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
+        int i_u = i;
+        int i_d = wrap_i(i+1);
+        int j_even = 2*j + (i % 2);
+
+        // relevant triangles
+        bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+        bool tri_d = lattice[ind_tri(t, i_d, j_even)];
+
+        bool delta_b = (pet == pet_fwd);
+        bool delta_a = (tri_u == tri_d);
+
+        tot_HP += (!delta_b) && delta_a;
+        tot_HE += 2*delta_a - 1;
+      }
+    }
+  }
+  const int N_PETALS = NT * NROWS * 3*NCOLS;
+  *HP = tot_HP / (double)N_PETALS;
+  *HE = tot_HE / (double)N_PETALS;
+}
+
+void measure_HT(double* HT) {
+  int tot_HT = 0;
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (fixed[ind_tri(0, i, j)] != FREE) {
+          continue;
+        }
+        // relevant triangles
+        bool tri = lattice[ind_tri(t, i, j)];
+        int t_fwd = wrap_t(t+1);
+        bool tri_fwd = lattice[ind_tri(t_fwd, i, j)];
+        int j_l = wrap_dj(j-1);
+        int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
+
+        // relevant petals
+        int j_odd = j/2;
+        bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
+        bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
+        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+
+        bool delta_a = (tri == tri_fwd);
+        bool delta_b = (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
+        tot_HT += (!delta_a) && delta_b;
+      }
+    }
+  }
+  const int N_TRIANGLES = NT * NROWS * 2*NCOLS;
+  *HT = tot_HT / (double)N_TRIANGLES;
 }
 
 void write_lattice(FILE *f) {
@@ -712,33 +870,87 @@ void write_lattice(FILE *f) {
 }
 
 typedef enum {
-  E_ARGS = 1,
+  E_OK = 0,
+  E_ARGS,
   E_OUT_FILE,
 } error_t;
 
-int main(int argc, char** argv) {
+const size_t STRLEN = 256;
+
+typedef struct {
+  int n_iter;
+  int save_freq;
+  int meas_freq;
+  unsigned seed;
+  const char* prefix;
+  // derived
+  int n_meas;
+  char fname_ens[STRLEN], fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
+} config_t;
+
+int parse_args(int argc, char** argv, config_t* cfg) {
   if (argc < 2) {
-    printf("Usage: %s <out_file>\n", argv[0]);
+    printf("Usage: %s <prefix>\n", argv[0]);
     return E_ARGS;
   }
-  const char* fname = argv[1];
-  FILE *f = fopen(fname, "wb");
-  if (f == NULL) {
+  const char* prefix = argv[1];
+  size_t len = strlen(prefix);
+  if (len >= STRLEN - 50) {
+    printf("Invalid prefix, too long\n");
+    return E_ARGS;
+  }
+  strncpy(cfg->fname_ens, prefix, STRLEN);
+  strncpy(cfg->fname_HT, prefix, STRLEN);
+  strncpy(cfg->fname_HP, prefix, STRLEN);
+  strncpy(cfg->fname_HE, prefix, STRLEN);
+  strcpy(cfg->fname_ens + len, ".ens.dat");
+  strcpy(cfg->fname_HT + len, ".HT.dat");
+  strcpy(cfg->fname_HP + len, ".HP.dat");
+  strcpy(cfg->fname_HE + len, ".HE.dat");
+
+  // TODO
+  cfg->n_iter = 100000;
+  cfg->save_freq = 100;
+  cfg->meas_freq = 1;
+  cfg->n_meas = (cfg->n_iter + 1) / cfg->meas_freq;
+  return 0;
+}
+
+int main(int argc, char** argv) {
+  config_t cfg;
+  int ret = parse_args(argc, argv, &cfg);
+  if (ret != E_OK) {
+    return ret;
+  }
+
+  FILE *f = fopen(cfg.fname_ens, "wb");
+  FILE *f_HT = fopen(cfg.fname_HT, "wb");
+  FILE *f_HP = fopen(cfg.fname_HP, "wb");
+  FILE *f_HE = fopen(cfg.fname_HE, "wb");
+  if (f == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
-  
+
   memset(lattice, 0xff, sizeof(lattice));
-  memset(frozen, 0xff, sizeof(frozen));
-  
-  const int n_iter = 100000;
-  const int n_skip = 100;
+  memset(fixed, 0xff, sizeof(fixed));
+  q_init();
+
+  double* HT = malloc(cfg.n_meas * sizeof(double));
+  double* HP = malloc(cfg.n_meas * sizeof(double));
+  double* HE = malloc(cfg.n_meas * sizeof(double));
   srand(59263491);
-  init_cold();
-  init_frozen();
-  for (int i = 0; i < n_iter; ++i) {
+
+  // init_fixed_pbc();
+  init_fixed_obc();
+
+  // init_lat_cold();
+  init_lat_hot_tri();
+  init_lat_apply_fixed();
+
+  for (int i = 0; i < cfg.n_iter; ++i) {
     if ((i+1) % 1000 == 0) {
-      printf("Iter %d / %d\n", i+1, n_iter);
+      printf("Iter %d / %d\n", i+1, cfg.n_iter);
     }
     // triangle sublattice
     sample_tri_bonds();
@@ -747,10 +959,26 @@ int main(int argc, char** argv) {
     sample_pet_bonds();
     update_pet_spins();
 
-    if ((i+1) % n_skip == 0) {
+    if ((i+1) % cfg.meas_freq == 0) {
+      const int ind = ((i+1) / cfg.meas_freq) - 1;
+      measure_HT(&HT[ind]);
+      measure_HP_HE(&HP[ind], &HE[ind]);
+    }
+
+    if ((i+1) % cfg.save_freq == 0) {
       write_lattice(f);
     }
   }
 
+  fwrite(HT, sizeof(double), cfg.n_meas, f_HT);
+  fwrite(HP, sizeof(double), cfg.n_meas, f_HP);
+  fwrite(HE, sizeof(double), cfg.n_meas, f_HE);
+
+  free(HT);
+  free(HP);
+  free(HE);
   fclose(f);
+  fclose(f_HT);
+  fclose(f_HP);
+  fclose(f_HE);
 }
