@@ -875,7 +875,8 @@ typedef enum {
   E_OUT_FILE,
 } error_t;
 
-const size_t STRLEN = 256;
+// const size_t STRLEN = 256;
+#define STRLEN 256
 
 typedef struct {
   int n_iter;
