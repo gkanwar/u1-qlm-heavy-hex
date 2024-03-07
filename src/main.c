@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 
 #ifndef NROWS
@@ -18,18 +20,58 @@
 #define NT 64
 #endif
 
-static const double dt = 0.1;
-static const double KP = 1.0;
-static const double KE = 1.0;
-// derived couplings betaX = dt K_x
-static const double betaT = dt;
-static const double betaP = dt * KP;
-static const double betaE = dt * KE;
+// static double betaT;
+// static double betaP;
+// static double betaE;
+// static double tanh_betaT;
+// static double cosh_betaT;
+// static double tanh_betaP;
+// static double cosh_betaP;
+// static double exp_m2_betaE;
+static double p_tri_spatial;
+static double p_tri_temporal;
+static double p_pet_spatial;
+static double p_pet_temporal;
 
+void init_couplings(double dt, double KP, double KE) {
+  // derived couplings betaX = dt K_x
+  double betaT = dt;
+  double betaP = dt * KP;
+  double betaE = dt * KE;
+  // derived bond probs
+  {
+    double p = 1.0 - exp(-2*betaE) / cosh(betaP);
+    assert(0.0 <= p && p <= 1.0);
+    p_tri_spatial = p;
+  }
+  {
+    double p = 1.0 - tanh(betaT);
+    assert(0.0 <= p && p <= 1.0);
+    p_tri_temporal = p;
+  }
+  {
+    double p = 1.0 - 1.0 / cosh(betaT);
+    assert(0.0 <= p && p <= 1.0);
+    p_pet_spatial = p;
+  }
+  {
+    double p = 1.0 - tanh(betaP);
+    assert(0.0 <= p && p <= 1.0);
+    p_pet_temporal = p;
+  }
+}
 
 // settings for debugging
 #define ENABLE_PET_SPATIAL 1
 #define ENABLE_TRI_SPATIAL 1
+
+// error codes
+typedef enum {
+  E_OK = 0,
+  E_ARGS,
+  E_OUT_FILE,
+  E_VALUE,
+} error_t;
 
 
 /// We can wastefully map the heavy hex into a rectangular grid. For example,
@@ -60,6 +102,9 @@ static spin_t lattice[NT * EROWS * ECOLS];
 #define FREE 0xff
 static spin_t fixed[EROWS * ECOLS];
 
+typedef enum {OBC, PBC} bc_t;
+typedef enum {COLD, HOT} init_t;
+
 static void init_fixed_obc() {
   for (int x = 0; x < EROWS; ++x) {
     for (int y = 0; y < ECOLS; ++y) {
@@ -81,6 +126,19 @@ static void init_fixed_pbc() {
       fixed[i] = FREE;
     }
   }
+}
+
+static int init_fixed_sites(bc_t bc_kind) {
+  if (bc_kind == OBC) {
+    init_fixed_obc();
+  }
+  else if (bc_kind == PBC) {
+    init_fixed_pbc();
+  }
+  else {
+    return E_VALUE;
+  }
+  return E_OK;
 }
 
 static inline int ind_tri(int t, int i, int j) {
@@ -228,22 +286,17 @@ void init_lat_hot_tri() {
   }
 }
 
-void init_lat_hot_petal() {
-  init_lat_cold();
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        lattice[ind_pet_even(t, i, j)] = rand_bool();
-      }
-    }
+int init_lat(init_t init_kind) {
+  if (init_kind == COLD) {
+    init_lat_cold();
   }
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < NCOLS; ++j) {
-        lattice[ind_pet_odd(t, i, j)] = rand_bool();
-      }
-    }
+  else if (init_kind == HOT) {
+    init_lat_hot_tri();
   }
+  else {
+    return E_VALUE;
+  }
+  return E_OK;
 }
 
 void init_lat_apply_fixed() {
@@ -286,9 +339,7 @@ bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return true;
   }
-  double p = 1.0 - exp(-2*betaE) / cosh(betaP);
-  assert(0.0 <= p && p <= 1.0);
-  return rand_double() < p;
+  return rand_double() < p_tri_spatial;
 }
 
 bool tri_bond_temporal(bool delta_a, bool delta_b) {
@@ -298,9 +349,7 @@ bool tri_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_b) {
     return true;
   }
-  double p = 1.0 - tanh(betaT);
-  assert(0.0 <= p && p <= 1.0);
-  return rand_double() < p;
+  return rand_double() < p_tri_temporal;
 }
 
 bool pet_bond_spatial(bool delta_a, bool delta_b) {
@@ -310,9 +359,7 @@ bool pet_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return true;
   }
-  double p = 1.0 - 1.0 / cosh(betaT);
-  assert(0.0 <= p && p <= 1.0);
-  return rand_double() < p;
+  return rand_double() < p_pet_spatial;
 }
 
 bool pet_bond_temporal(bool delta_a, bool delta_b) {
@@ -322,9 +369,7 @@ bool pet_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return true;
   }
-  double p = 1.0 - tanh(betaP);
-  assert(0.0 <= p && p <= 1.0);
-  return rand_double() < p;
+  return rand_double() < p_pet_temporal;
 }
 
 void sample_tri_bonds() {
@@ -869,12 +914,6 @@ void write_lattice(FILE *f) {
   fwrite(lattice, 1, sizeof(lattice), f);
 }
 
-typedef enum {
-  E_OK = 0,
-  E_ARGS,
-  E_OUT_FILE,
-} error_t;
-
 // const size_t STRLEN = 256;
 #define STRLEN 256
 
@@ -889,17 +928,108 @@ typedef struct {
   char fname_ens[STRLEN], fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
 } config_t;
 
+void usage(const char* prog) {
+  printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
+         "-i <n_iter> -s <save_freq> -m <meas_freq> "
+         "[-b (obc|pbc)] [-c (cold|hot)] [-r <seed>]\n", prog);
+}
+
 int parse_args(int argc, char** argv, config_t* cfg) {
   if (argc < 2) {
-    printf("Usage: %s <prefix>\n", argv[0]);
+    usage(argv[0]);
     return E_ARGS;
   }
-  const char* prefix = argv[1];
+
+  bool set_dt = false, set_KP = false, set_KE = false,
+      set_prefix = false, set_n_iter = false, set_save_freq = false,
+      set_meas_freq = false;
+  double dt, KP, KE;
+  bc_t bc_kind = PBC;
+  init_t init_kind = HOT;
+  const char* prefix;
+  char c;
+  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:")) != -1) {
+    if (c == 't') {
+      dt = atof(optarg);
+      set_dt = true;
+    }
+    else if (c == 'p') {
+      KP = atof(optarg);
+      set_KP = true;
+    }
+    else if (c == 'e') {
+      KE = atof(optarg);
+      set_KE = true;
+    }
+    else if (c == 'f') {
+      prefix = optarg;
+      set_prefix = true;
+    }
+    else if (c == 'i') {
+      cfg->n_iter = atoi(optarg);
+      set_n_iter = true;
+    }
+    else if (c == 's') {
+      cfg->save_freq = atoi(optarg);
+      set_save_freq = true;
+    }
+    else if (c == 'm') {
+      cfg->meas_freq = atoi(optarg);
+      set_meas_freq = true;
+    }
+    else if (c == 'r') {
+      cfg->seed = atoi(optarg);
+    }
+    else if (c == 'b') {
+      if (strcmp(optarg, "pbc") == 0) {
+        bc_kind = PBC;
+      }
+      else if (strcmp(optarg, "obc") == 0) {
+        bc_kind = OBC;
+      }
+      else {
+        usage(argv[0]);
+        printf("Invalid -b argument: %s\n", optarg);
+        return E_ARGS;
+      }
+    }
+    else if (c == 'c') {
+      if (strcmp(optarg, "cold") == 0) {
+        init_kind = COLD;
+      }
+      else if (strcmp(optarg, "hot") == 0) {
+        init_kind = HOT;
+      }
+      else {
+        usage(argv[0]);
+        printf("Invalid -c argument: %s\n", optarg);
+        return E_ARGS;
+      }
+    }
+    else if (c == '?') {
+      usage(argv[0]);
+      printf("Missing arg or invalid -%c\n", optopt);
+      return E_ARGS;
+    }
+    else {
+      usage(argv[0]);
+      return E_ARGS;
+    }
+  }
+
+  if (!set_dt || !set_KP || !set_KE || !set_prefix ||
+      !set_n_iter || !set_save_freq || !set_meas_freq) {
+    usage(argv[0]);
+    printf("Missing a flag\n");
+    return E_ARGS;
+  }
+
   size_t len = strlen(prefix);
   if (len >= STRLEN - 50) {
     printf("Invalid prefix, too long\n");
     return E_ARGS;
   }
+  // derived
   strncpy(cfg->fname_ens, prefix, STRLEN);
   strncpy(cfg->fname_HT, prefix, STRLEN);
   strncpy(cfg->fname_HP, prefix, STRLEN);
@@ -909,16 +1039,33 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   strcpy(cfg->fname_HP + len, ".HP.dat");
   strcpy(cfg->fname_HE + len, ".HE.dat");
 
-  // TODO
-  cfg->n_iter = 100000;
-  cfg->save_freq = 100;
-  cfg->meas_freq = 1;
+  // derived
   cfg->n_meas = (cfg->n_iter + 1) / cfg->meas_freq;
-  return 0;
+  if (dt <= 0.0) {
+    printf("Invalid dt = %f\n", dt);
+    return E_ARGS;
+  }
+
+  // init global state
+  int ret;
+  srand(cfg->seed);
+  init_couplings(dt, KP, KE);
+  ret = init_fixed_sites(bc_kind);
+  assert(ret == E_OK);
+  ret = init_lat(init_kind);
+  assert(ret == E_OK);
+  init_lat_apply_fixed();
+
+  return E_OK;
 }
 
 int main(int argc, char** argv) {
   config_t cfg;
+  cfg.seed = time(NULL);
+  q_init();
+  memset(lattice, 0xff, sizeof(lattice));
+  memset(fixed, 0xff, sizeof(fixed));
+
   int ret = parse_args(argc, argv, &cfg);
   if (ret != E_OK) {
     return ret;
@@ -933,25 +1080,21 @@ int main(int argc, char** argv) {
     return E_OUT_FILE;
   }
 
-  memset(lattice, 0xff, sizeof(lattice));
-  memset(fixed, 0xff, sizeof(fixed));
-  q_init();
-
   double* HT = malloc(cfg.n_meas * sizeof(double));
   double* HP = malloc(cfg.n_meas * sizeof(double));
   double* HE = malloc(cfg.n_meas * sizeof(double));
-  srand(59263491);
 
-  // init_fixed_pbc();
-  init_fixed_obc();
-
-  // init_lat_cold();
-  init_lat_hot_tri();
-  init_lat_apply_fixed();
-
+  clock_t start = clock();
   for (int i = 0; i < cfg.n_iter; ++i) {
+    // progress
     if ((i+1) % 1000 == 0) {
-      printf("Iter %d / %d\n", i+1, cfg.n_iter);
+      clock_t ticks = clock() - start;
+      double elapsed = ticks / (double)CLOCKS_PER_SEC;
+      double expected = (elapsed * cfg.n_iter) / (i+1);
+      double rate = (i+1) / elapsed;
+      printf(
+          "Iter %d / %d (%.2f / %.2fs | %.2f it/s)\n",
+          i+1, cfg.n_iter, elapsed, expected, rate);
     }
     // triangle sublattice
     sample_tri_bonds();
