@@ -3,10 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import paper_plt
 paper_plt.load_basic_config()
-
-KP = 1.0
-KE = 1.0
-dt = 0.1
+import struct
 
 def x_over_tanh(x, c):
     return np.where(
@@ -16,12 +13,13 @@ def x_over_tanh(x, c):
     )
 
 def main():
-    NT = 64
-    NX = 4
-    NY = 8
-
+    with open('tmp.out.meta.dat', 'rb') as f:
+        meta_bytes = f.read()
+    header = 'dddiiiI'
+    h_size = struct.calcsize(header)
+    (dt, KP, KE, NT, NX, NY, seed) = struct.unpack(header, meta_bytes[:h_size])
+    geom = np.frombuffer(meta_bytes[h_size:], dtype=np.uint8).reshape(NX, NY)
     ens = np.fromfile('tmp.out.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
-    geom = np.fromfile('tmp.out.geom.dat', dtype=np.uint8).reshape(NX, NY)
     N_FREE_TRI = np.sum(geom[::2,::2] == 0xff)
     N_FREE_PET = np.sum(geom[1::2,:] == 0xff) + np.sum(geom[:,1::2] == 0xff)
     print(f'Geom:\n{geom}')

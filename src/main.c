@@ -937,6 +937,7 @@ void write_lattice(FILE *f) {
 #define STRLEN 256
 
 typedef struct {
+  double dt, KP, KE;
   int n_iter;
   int save_freq;
   int meas_freq;
@@ -944,7 +945,7 @@ typedef struct {
   const char* prefix;
   // derived
   int n_meas;
-  char fname_ens[STRLEN], fname_geom[STRLEN],
+  char fname_ens[STRLEN], fname_meta[STRLEN],
     fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
 } config_t;
 
@@ -1062,12 +1063,12 @@ int parse_args(int argc, char** argv, config_t* cfg) {
 
   // derived
   strncpy(cfg->fname_ens, prefix, STRLEN);
-  strncpy(cfg->fname_geom, prefix, STRLEN);
+  strncpy(cfg->fname_meta, prefix, STRLEN);
   strncpy(cfg->fname_HT, prefix, STRLEN);
   strncpy(cfg->fname_HP, prefix, STRLEN);
   strncpy(cfg->fname_HE, prefix, STRLEN);
   strncpy(cfg->fname_ens + len, ".ens.dat", STRLEN-len);
-  strncpy(cfg->fname_geom + len, ".geom.dat", STRLEN-len);
+  strncpy(cfg->fname_meta + len, ".meta.dat", STRLEN-len);
   strncpy(cfg->fname_HT + len, ".HT.dat", STRLEN-len);
   strncpy(cfg->fname_HP + len, ".HP.dat", STRLEN-len);
   strncpy(cfg->fname_HE + len, ".HE.dat", STRLEN-len);
@@ -1084,6 +1085,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   // init global state
   int ret;
   srand(cfg->seed);
+  cfg->dt = dt;
+  cfg->KP = KP;
+  cfg->KE = KE;
   init_couplings(dt, KP, KE);
   ret = init_geom(bc_kind);
   assert(ret == E_OK);
@@ -1093,6 +1097,13 @@ int parse_args(int argc, char** argv, config_t* cfg) {
 
   return E_OK;
 }
+
+typedef struct {
+  double dt, KP, KE;
+  int nt, erows, ecols;
+  unsigned seed;
+  spin_t geom[EROWS * ECOLS];
+} meta_t;
 
 int main(int argc, char** argv) {
   config_t cfg;
@@ -1105,16 +1116,23 @@ int main(int argc, char** argv) {
   }
 
   FILE *f = fopen(cfg.fname_ens, "wb");
-  FILE *f_geom = fopen(cfg.fname_geom, "wb");
+  FILE *f_meta = fopen(cfg.fname_meta, "wb");
   FILE *f_HT = fopen(cfg.fname_HT, "wb");
   FILE *f_HP = fopen(cfg.fname_HP, "wb");
   FILE *f_HE = fopen(cfg.fname_HE, "wb");
-  if (f == NULL || f_geom == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
+  if (f == NULL || f_meta == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
-  fwrite(geom, 1, sizeof(geom), f_geom);
-  fclose(f_geom);
+  meta_t meta = {
+    .dt = cfg.dt, .KP = cfg.KP, .KE = cfg.KE,
+    .nt = NT, .erows = EROWS, .ecols = ECOLS,
+    .seed = cfg.seed
+  };
+  assert(sizeof(meta.geom) == sizeof(geom));
+  memcpy(meta.geom, geom, sizeof(geom));
+  fwrite(&meta, 1, sizeof(meta), f_meta);
+  fclose(f_meta);
 
 
   // Hamiltonian terms stored as pairs [(H+, H-)[0], (H+, H-)[1], ...]
