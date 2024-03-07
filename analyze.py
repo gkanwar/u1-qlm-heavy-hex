@@ -6,6 +6,14 @@ paper_plt.load_basic_config()
 
 KP = 1.0
 KE = 1.0
+dt = 0.1
+
+def x_over_tanh(x, c):
+    return np.where(
+        np.isclose(x, 0.0),
+        np.ones_like(x) / c, # small arg limit
+        x / np.tanh(c * x)
+    )
 
 def main():
     NT = 64
@@ -13,15 +21,25 @@ def main():
     NY = 8
 
     ens = np.fromfile('tmp.out.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
+    geom = np.fromfile('tmp.out.geom.dat', dtype=np.uint8).reshape(NX, NY)
+    N_FREE_TRI = np.sum(geom[::2,::2] == 0xff)
+    N_FREE_PET = np.sum(geom[1::2,:] == 0xff) + np.sum(geom[:,1::2] == 0xff)
+    print(f'Geom:\n{geom}')
+    print(f'{N_FREE_TRI=} {N_FREE_PET=}')
 
     print(ens[0,0])
     print(ens[1,0])
     print(ens[2,0])
     print(ens[3,0])
     
-    HT = np.fromfile('tmp.out.HT.dat', dtype=np.float64)
-    HP = np.fromfile('tmp.out.HP.dat', dtype=np.float64)
-    HE = np.fromfile('tmp.out.HE.dat', dtype=np.float64)
+    HT = np.fromfile('tmp.out.HT.dat', dtype=np.int32).reshape(-1, 2)
+    HP = np.fromfile('tmp.out.HP.dat', dtype=np.int32).reshape(-1, 2)
+    HE = np.fromfile('tmp.out.HE.dat', dtype=np.int32).reshape(-1, 2)
+    assert HT.shape[0] == HP.shape[0] == HE.shape[0]
+    print(f'{HT.shape=}')
+    HT = (HT[...,0] * np.tanh(dt) + HT[...,1] / np.tanh(dt)) / NT
+    HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
+    HE = (KE * (HE[...,0] - HE[...,1])) / NT
 
     MA, MB = measure_M(ens)
 
@@ -46,9 +64,9 @@ def main():
         axl.legend()
         axr.hist(Hi, bins=30, orientation='horizontal')
 
-    N_TRI = NX * NY / 4
-    N_PET = NX * NY*3 / 8
-    H_est = al.bootstrap(-HT*N_TRI - (KP*HP + KE*HE)*N_PET, Nboot=1000, f=al.rmean)
+    # N_TRI = NX * NY / 4
+    # N_PET = NX * NY*3 / 8
+    H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
     print(f'Ground state energy: {H_est}')
         
     plt.show()

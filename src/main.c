@@ -100,46 +100,9 @@ typedef uint8_t spin_t;
 static spin_t lattice[NT * EROWS * ECOLS];
 
 #define FREE 0xff
-static spin_t fixed[EROWS * ECOLS];
+#define DUMMY 0xaa
+static spin_t geom[EROWS * ECOLS];
 
-typedef enum {OBC, PBC} bc_t;
-typedef enum {COLD, HOT} init_t;
-
-static void init_fixed_obc() {
-  for (int x = 0; x < EROWS; ++x) {
-    for (int y = 0; y < ECOLS; ++y) {
-      int i = x*ECOLS + y;
-      if (x == EROWS-1 || y >= ECOLS-3) {
-        fixed[i] = false;
-      }
-      else {
-        fixed[i] = FREE;
-      }
-    }
-  }
-}
-
-static void init_fixed_pbc() {
-  for (int x = 0; x < EROWS; ++x) {
-    for (int y = 0; y < ECOLS; ++y) {
-      int i = x*ECOLS + y;
-      fixed[i] = FREE;
-    }
-  }
-}
-
-static int init_fixed_sites(bc_t bc_kind) {
-  if (bc_kind == OBC) {
-    init_fixed_obc();
-  }
-  else if (bc_kind == PBC) {
-    init_fixed_pbc();
-  }
-  else {
-    return E_VALUE;
-  }
-  return E_OK;
-}
 
 static inline int ind_tri(int t, int i, int j) {
   assert(t < NT && i < NROWS && j < 2*NCOLS);
@@ -166,6 +129,144 @@ static inline int wrap_dj(int j) {
 static inline int wrap_t(int t) {
   return (NT+t) % NT;
 }
+
+
+typedef enum {OBC, PBC} bc_t;
+typedef enum {COLD, HOT} init_t;
+
+static void init_geom_obc() {
+  // fix left and bottom zones
+  for (int x = 0; x < EROWS; ++x) {
+    for (int y = 0; y < ECOLS; ++y) {
+      int i = x*ECOLS + y;
+      if (x == EROWS-1 || y >= ECOLS-3) {
+        geom[i] = false;
+      }
+    }
+  }
+}
+
+static void init_geom_pbc() {
+  // no need to change anything
+}
+
+static int init_geom(bc_t bc_kind) {
+  // mark hex lattice as FREE and other sites as DUMMY
+  memset(geom, DUMMY, sizeof(geom));
+  for (int i = 0; i < NROWS; ++i) {
+    for (int j = 0; j < 2*NCOLS; ++j) {
+      geom[ind_tri(0, i, j)] = FREE;
+      geom[ind_pet_even(0, i, j)] = FREE;
+    }
+    for (int j = 0; j < NCOLS; ++j) {
+      geom[ind_pet_odd(0, i, j)] = FREE;
+    }
+  }
+  // fill in fixed sites based on BCs
+  if (bc_kind == OBC) {
+    init_geom_obc();
+  }
+  else if (bc_kind == PBC) {
+    init_geom_pbc();
+  }
+  else {
+    return E_VALUE;
+  }
+  return E_OK;
+}
+
+static inline bool rand_bool() {
+  assert(RAND_MAX % 2 == 1);
+  return rand() % 2;
+}
+static inline double rand_double() {
+  // TODO: may have discretization artifacts if RAND_MAX too small
+  return rand() / (double)RAND_MAX;
+}
+
+
+void init_lat_cold() {
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_tri(t, i, j)] = false;
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_pet_even(t, i, j)] = false;
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        lattice[ind_pet_odd(t, i, j)] = false;
+      }
+    }
+  }
+}
+
+void init_lat_hot_tri() {
+  init_lat_cold();
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        lattice[ind_tri(t, i, j)] = rand_bool();
+      }
+    }
+  }
+}
+
+int init_lat(init_t init_kind) {
+  memset(lattice, 0xff, sizeof(lattice));
+  if (init_kind == COLD) {
+    init_lat_cold();
+  }
+  else if (init_kind == HOT) {
+    init_lat_hot_tri();
+  }
+  else {
+    return E_VALUE;
+  }
+  return E_OK;
+}
+
+void init_lat_apply_geom() {
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        spin_t value = geom[ind_tri(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_tri(t, i, j)] = value;
+        }
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        spin_t value = geom[ind_pet_even(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_pet_even(t, i, j)] = value;
+        }
+      }
+    }
+  }
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        spin_t value = geom[ind_pet_odd(0, i, j)];
+        if (value != FREE) {
+          lattice[ind_pet_odd(t, i, j)] = value;
+        }
+      }
+    }
+  }
+}
+
 
 // bit mask 00 | tfwd | tbwd | left | right | up | down
 //  - up/down bonds are irrelevant for petals
@@ -241,97 +342,6 @@ static inline void q_push(coord_t idx) {
 }
 
 
-static inline bool rand_bool() {
-  assert(RAND_MAX % 2 == 1);
-  return rand() % 2;
-}
-static inline double rand_double() {
-  // TODO: may have discretization artifacts if RAND_MAX too small
-  return rand() / (double)RAND_MAX;
-}
-
-
-void init_lat_cold() {
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        lattice[ind_tri(t, i, j)] = false;
-      }
-    }
-  }
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        lattice[ind_pet_even(t, i, j)] = false;
-      }
-    }
-  }
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < NCOLS; ++j) {
-        lattice[ind_pet_odd(t, i, j)] = false;
-      }
-    }
-  }
-}
-
-void init_lat_hot_tri() {
-  init_lat_cold();
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        lattice[ind_tri(t, i, j)] = rand_bool();
-      }
-    }
-  }
-}
-
-int init_lat(init_t init_kind) {
-  if (init_kind == COLD) {
-    init_lat_cold();
-  }
-  else if (init_kind == HOT) {
-    init_lat_hot_tri();
-  }
-  else {
-    return E_VALUE;
-  }
-  return E_OK;
-}
-
-void init_lat_apply_fixed() {
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        spin_t value = fixed[ind_tri(0, i, j)];
-        if (value != FREE) {
-          lattice[ind_tri(t, i, j)] = value;
-        }
-      }
-    }
-  }
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        spin_t value = fixed[ind_pet_even(0, i, j)];
-        if (value != FREE) {
-          lattice[ind_pet_even(t, i, j)] = value;
-        }
-      }
-    }
-  }
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < NCOLS; ++j) {
-        spin_t value = fixed[ind_pet_odd(0, i, j)];
-        if (value != FREE) {
-          lattice[ind_pet_odd(t, i, j)] = value;
-        }
-      }
-    }
-  }
-}
-
 bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
     return false;
@@ -402,9 +412,9 @@ void sample_tri_bonds() {
         bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
         bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
         bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
-        bool pet_l_fixed = fixed[ind_pet_even(0, i, j_l)] != FREE;
-        bool pet_r_fixed = fixed[ind_pet_even(0, i, j)] != FREE;
-        bool pet_ud_fixed = fixed[ind_pet_odd(0, pet_i_ud, j_odd)] != FREE;
+        bool pet_l_fixed = geom[ind_pet_even(0, i, j_l)] != FREE;
+        bool pet_r_fixed = geom[ind_pet_even(0, i, j)] != FREE;
+        bool pet_ud_fixed = geom[ind_pet_odd(0, pet_i_ud, j_odd)] != FREE;
 
         // bonds
         // T_FWD / T_BWD
@@ -512,13 +522,13 @@ void update_tri_spins() {
         if (seen.tri[t][i][j]) {
           continue;
         }
-        if (fixed[ind_tri(0, i, j)] == FREE) {
+        if (geom[ind_tri(0, i, j)] == FREE) {
           continue;
         }
         seen.tri[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j});
-        flood_fill_tri(fixed[ind_tri(0, i, j)]);
+        flood_fill_tri(geom[ind_tri(0, i, j)]);
         assert(q_empty());
       }
     }
@@ -595,8 +605,8 @@ void sample_pet_bonds() {
         bool tri_fwd_d = lattice[ind_tri(t, i_d, j_even)];
         bool tri_bwd_u = lattice[ind_tri(t_bwd, i_u, j_even)];
         bool tri_bwd_d = lattice[ind_tri(t_bwd, i_d, j_even)];
-        bool tri_u_fixed = fixed[ind_tri(0, i_u, j_even)] != FREE;
-        bool tri_d_fixed = fixed[ind_tri(0, i_d, j_even)] != FREE;
+        bool tri_u_fixed = geom[ind_tri(0, i_u, j_even)] != FREE;
+        bool tri_d_fixed = geom[ind_tri(0, i_d, j_even)] != FREE;
 
         // bonds
         // T_FWD / T_BWD
@@ -756,13 +766,13 @@ void update_pet_spins() {
         if (seen.pet_even[t][i][j]) {
           continue;
         }
-        if (fixed[ind_pet_even(0, i, j)] == FREE) {
+        if (geom[ind_pet_even(0, i, j)] == FREE) {
           continue;
         }
         seen.pet_even[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(fixed[ind_pet_even(0, i, j)]);
+        flood_fill_pet(geom[ind_pet_even(0, i, j)]);
         assert(q_empty());
       }
     }
@@ -789,13 +799,13 @@ void update_pet_spins() {
         if (seen.pet_odd[t][i][j]) {
           continue;
         }
-        if (fixed[ind_pet_odd(0, i, j)] == FREE) {
+        if (geom[ind_pet_odd(0, i, j)] == FREE) {
           continue;
         }
         seen.pet_odd[t][i][j] = true;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        flood_fill_pet(fixed[ind_pet_odd(0, i, j)]);
+        flood_fill_pet(geom[ind_pet_odd(0, i, j)]);
         assert(q_empty());
       }
     }
@@ -817,14 +827,16 @@ void update_pet_spins() {
   }
 }
 
-void measure_HP_HE(double* HP, double* HE) {
-  int tot_HP = 0;
-  int tot_HE = 0;
+void measure_HP_HE(int* HP_plus, int* HP_minus, int* HE_plus, int* HE_minus) {
+  int tot_HP_plus = 0;
+  int tot_HP_minus = 0;
+  int tot_HE_plus = 0;
+  int tot_HE_minus = 0;
   // even petals
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
-        if (fixed[ind_pet_even(0, i, j)] != FREE) {
+        if (geom[ind_pet_even(0, i, j)] != FREE) {
           continue;
         }
         // relevant petals
@@ -841,8 +853,10 @@ void measure_HP_HE(double* HP, double* HE) {
         bool delta_b = (pet == pet_fwd);
         bool delta_a = (tri_l == tri_r);
 
-        tot_HP += (!delta_b) && delta_a;
-        tot_HE += 2*delta_a - 1;
+        tot_HP_plus += delta_b && delta_a;
+        tot_HP_minus += (!delta_b) && delta_a;
+        tot_HE_plus += delta_a;
+        tot_HE_minus += !delta_a;
       }
     }
   }
@@ -850,7 +864,7 @@ void measure_HP_HE(double* HP, double* HE) {
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
-        if (fixed[ind_pet_odd(0, i, j)] != FREE) {
+        if (geom[ind_pet_odd(0, i, j)] != FREE) {
           continue;
         }
         // relevant petals
@@ -868,22 +882,26 @@ void measure_HP_HE(double* HP, double* HE) {
         bool delta_b = (pet == pet_fwd);
         bool delta_a = (tri_u == tri_d);
 
-        tot_HP += (!delta_b) && delta_a;
-        tot_HE += 2*delta_a - 1;
+        tot_HP_plus += delta_b && delta_a;
+        tot_HP_minus += (!delta_b) && delta_a;
+        tot_HE_plus += delta_a;
+        tot_HE_minus += !delta_a;
       }
     }
   }
-  const int N_PETALS = NT * NROWS * 3*NCOLS;
-  *HP = tot_HP / (double)N_PETALS;
-  *HE = tot_HE / (double)N_PETALS;
+  *HP_plus = tot_HP_plus;
+  *HP_minus = tot_HP_minus;
+  *HE_plus = tot_HE_plus;
+  *HE_minus = tot_HE_minus;
 }
 
-void measure_HT(double* HT) {
-  int tot_HT = 0;
+void measure_HT(int* HT_plus, int* HT_minus) {
+  int tot_HT_plus = 0;
+  int tot_HT_minus = 0;
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
-        if (fixed[ind_tri(0, i, j)] != FREE) {
+        if (geom[ind_tri(0, i, j)] != FREE) {
           continue;
         }
         // relevant triangles
@@ -901,12 +919,13 @@ void measure_HT(double* HT) {
 
         bool delta_a = (tri == tri_fwd);
         bool delta_b = (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
-        tot_HT += (!delta_a) && delta_b;
+        tot_HT_plus += delta_a && delta_b;
+        tot_HT_minus += (!delta_a) && delta_b;
       }
     }
   }
-  const int N_TRIANGLES = NT * NROWS * 2*NCOLS;
-  *HT = tot_HT / (double)N_TRIANGLES;
+  *HT_plus = tot_HT_plus;
+  *HT_minus = tot_HT_minus;
 }
 
 void write_lattice(FILE *f) {
@@ -925,7 +944,8 @@ typedef struct {
   const char* prefix;
   // derived
   int n_meas;
-  char fname_ens[STRLEN], fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
+  char fname_ens[STRLEN], fname_geom[STRLEN],
+    fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
 } config_t;
 
 void usage(const char* prog) {
@@ -1017,10 +1037,20 @@ int parse_args(int argc, char** argv, config_t* cfg) {
     }
   }
 
+  // validate args
   if (!set_dt || !set_KP || !set_KE || !set_prefix ||
       !set_n_iter || !set_save_freq || !set_meas_freq) {
     usage(argv[0]);
     printf("Missing a flag\n");
+    return E_ARGS;
+  }
+
+  if (cfg->meas_freq <= 0 || cfg->save_freq <= 0) {
+    printf("Invalid meas_freq or save_freq\n");
+    return E_ARGS;
+  }
+  if (dt <= 0.0) {
+    printf("Invalid dt = %f\n", dt);
     return E_ARGS;
   }
 
@@ -1029,32 +1059,37 @@ int parse_args(int argc, char** argv, config_t* cfg) {
     printf("Invalid prefix, too long\n");
     return E_ARGS;
   }
+
   // derived
   strncpy(cfg->fname_ens, prefix, STRLEN);
+  strncpy(cfg->fname_geom, prefix, STRLEN);
   strncpy(cfg->fname_HT, prefix, STRLEN);
   strncpy(cfg->fname_HP, prefix, STRLEN);
   strncpy(cfg->fname_HE, prefix, STRLEN);
-  strcpy(cfg->fname_ens + len, ".ens.dat");
-  strcpy(cfg->fname_HT + len, ".HT.dat");
-  strcpy(cfg->fname_HP + len, ".HP.dat");
-  strcpy(cfg->fname_HE + len, ".HE.dat");
+  strncpy(cfg->fname_ens + len, ".ens.dat", STRLEN-len);
+  strncpy(cfg->fname_geom + len, ".geom.dat", STRLEN-len);
+  strncpy(cfg->fname_HT + len, ".HT.dat", STRLEN-len);
+  strncpy(cfg->fname_HP + len, ".HP.dat", STRLEN-len);
+  strncpy(cfg->fname_HE + len, ".HE.dat", STRLEN-len);
 
   // derived
-  cfg->n_meas = (cfg->n_iter + 1) / cfg->meas_freq;
-  if (dt <= 0.0) {
-    printf("Invalid dt = %f\n", dt);
-    return E_ARGS;
+  if (cfg->meas_freq > 1) {
+    cfg->n_meas = (cfg->n_iter + 1) / cfg->meas_freq;
+  }
+  else {
+    assert(cfg->meas_freq == 1);
+    cfg->n_meas = cfg->n_iter;
   }
 
   // init global state
   int ret;
   srand(cfg->seed);
   init_couplings(dt, KP, KE);
-  ret = init_fixed_sites(bc_kind);
+  ret = init_geom(bc_kind);
   assert(ret == E_OK);
   ret = init_lat(init_kind);
   assert(ret == E_OK);
-  init_lat_apply_fixed();
+  init_lat_apply_geom();
 
   return E_OK;
 }
@@ -1063,8 +1098,6 @@ int main(int argc, char** argv) {
   config_t cfg;
   cfg.seed = time(NULL);
   q_init();
-  memset(lattice, 0xff, sizeof(lattice));
-  memset(fixed, 0xff, sizeof(fixed));
 
   int ret = parse_args(argc, argv, &cfg);
   if (ret != E_OK) {
@@ -1072,17 +1105,23 @@ int main(int argc, char** argv) {
   }
 
   FILE *f = fopen(cfg.fname_ens, "wb");
+  FILE *f_geom = fopen(cfg.fname_geom, "wb");
   FILE *f_HT = fopen(cfg.fname_HT, "wb");
   FILE *f_HP = fopen(cfg.fname_HP, "wb");
   FILE *f_HE = fopen(cfg.fname_HE, "wb");
-  if (f == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
+  if (f == NULL || f_geom == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
+  fwrite(geom, 1, sizeof(geom), f_geom);
+  fclose(f_geom);
 
-  double* HT = malloc(cfg.n_meas * sizeof(double));
-  double* HP = malloc(cfg.n_meas * sizeof(double));
-  double* HE = malloc(cfg.n_meas * sizeof(double));
+
+  // Hamiltonian terms stored as pairs [(H+, H-)[0], (H+, H-)[1], ...]
+  size_t len_Hi = 2 * cfg.n_meas;
+  int* HT = malloc(len_Hi * sizeof(int));
+  int* HP = malloc(len_Hi * sizeof(int));
+  int* HE = malloc(len_Hi * sizeof(int));
 
   clock_t start = clock();
   for (int i = 0; i < cfg.n_iter; ++i) {
@@ -1105,8 +1144,8 @@ int main(int argc, char** argv) {
 
     if ((i+1) % cfg.meas_freq == 0) {
       const int ind = ((i+1) / cfg.meas_freq) - 1;
-      measure_HT(&HT[ind]);
-      measure_HP_HE(&HP[ind], &HE[ind]);
+      measure_HT(&HT[2*ind], &HT[2*ind+1]);
+      measure_HP_HE(&HP[2*ind], &HP[2*ind+1], &HE[2*ind], &HE[2*ind+1]);
     }
 
     if ((i+1) % cfg.save_freq == 0) {
@@ -1114,9 +1153,9 @@ int main(int argc, char** argv) {
     }
   }
 
-  fwrite(HT, sizeof(double), cfg.n_meas, f_HT);
-  fwrite(HP, sizeof(double), cfg.n_meas, f_HP);
-  fwrite(HE, sizeof(double), cfg.n_meas, f_HE);
+  fwrite(HT, sizeof(int), len_Hi, f_HT);
+  fwrite(HP, sizeof(int), len_Hi, f_HP);
+  fwrite(HE, sizeof(int), len_Hi, f_HE);
 
   free(HT);
   free(HP);
