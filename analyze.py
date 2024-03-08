@@ -7,7 +7,7 @@ import struct
 
 def x_over_tanh(x, c):
     return np.where(
-        np.isclose(x, 0.0),
+        np.isclose(c * x, 0.0),
         np.ones_like(x) / c, # small arg limit
         x / np.tanh(c * x)
     )
@@ -18,6 +18,9 @@ def main():
     header = 'dddiiiI'
     h_size = struct.calcsize(header)
     (dt, KP, KE, NT, NX, NY, seed) = struct.unpack(header, meta_bytes[:h_size])
+    print(f'Couplings: {dt=} {KP=} {KE=}')
+    print(f'Shape: {NT=} {NX=} {NY=}')
+    print(f'Seed: {seed=}')
     geom = np.frombuffer(meta_bytes[h_size:], dtype=np.uint8).reshape(NX, NY)
     ens = np.fromfile('tmp.out.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
     N_FREE_TRI = np.sum(geom[::2,::2] == 0xff)
@@ -35,7 +38,10 @@ def main():
     HE = np.fromfile('tmp.out.HE.dat', dtype=np.int32).reshape(-1, 2)
     assert HT.shape[0] == HP.shape[0] == HE.shape[0]
     print(f'{HT.shape=}')
-    HT = (HT[...,0] * np.tanh(dt) + HT[...,1] / np.tanh(dt)) / NT
+    # DB conventions
+    KT = 4
+    KP *= 2
+    HT = (KT*HT[...,0] * np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
     HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HE = (KE * (HE[...,0] - HE[...,1])) / NT
 
@@ -64,6 +70,8 @@ def main():
 
     # N_TRI = NX * NY / 4
     # N_PET = NX * NY*3 / 8
+    # H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
+    # DB convention
     H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
     print(f'Ground state energy: {H_est}')
         

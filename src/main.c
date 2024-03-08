@@ -35,9 +35,11 @@ static double p_pet_temporal;
 
 void init_couplings(double dt, double KP, double KE) {
   // derived couplings betaX = dt K_x
-  double betaT = dt;
-  double betaP = dt * KP;
+  // double betaT = dt; // GK conventions
+  // double betaP = dt * KP; // GK conventions
   double betaE = dt * KE;
+  double betaT = dt * 4; // DB conventions
+  double betaP = dt * KP * 2; // DB conventions
   // derived bond probs
   {
     double p = 1.0 - exp(-2*betaE) / cosh(betaP);
