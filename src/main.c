@@ -11,13 +11,13 @@
 
 
 #ifndef NROWS
-#define NROWS 2
+#error "NROWS must be defined"
 #endif
 #ifndef NCOLS
-#define NCOLS 2
+#error "NCOLS must be defined"
 #endif
 #ifndef NT
-#define NT 64
+#error "NT must be defined"
 #endif
 
 // static double betaT;

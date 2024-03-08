@@ -8,15 +8,21 @@ SRCS=$(addprefix ${SRCDIR}/,main.c)
 BIN=bin
 PROG=cluster
 
-all: debug
+NROWS?=2
+NCOLS?=2
+NT?=64
+CFLAGS_CFG=-DNROWS=$(NROWS) -DNCOLS=$(NCOLS) -DNT=$(NT)
 
-debug: ${BIN}/${PROG}.debug
-release: ${BIN}/${PROG}.release
+all: release
 
-${BIN}/${PROG}.debug: ${SRCS}
-	$(CC) $(CFLAGS_DGB) $^ $(LDFLAGS) -o $@
-${BIN}/${PROG}.release: ${SRCS}
-	$(CC) $(CFLAGS_REL) $^ $(LDFLAGS) -o $@
+debug: ${BIN}/${PROG}.$(NT)_$(NROWS)_$(NCOLS).debug
+release: ${BIN}/${PROG}.$(NT)_$(NROWS)_$(NCOLS).release
+
+${BIN}/${PROG}.$(NT)_$(NROWS)_$(NCOLS).debug: ${SRCS}
+	$(CC) $(CFLAGS_DGB) $(CFLAGS_CFG) $^ $(LDFLAGS) -o $@
+${BIN}/${PROG}.$(NT)_$(NROWS)_$(NCOLS).release: ${SRCS}
+	$(CC) $(CFLAGS_REL) $(CFLAGS_CFG) $^ $(LDFLAGS) -o $@
+
 
 .PHONY: all debug release clean
 clean:
