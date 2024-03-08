@@ -42,8 +42,10 @@ def load(prefix):
     assert HT.shape[0] == HP.shape[0] == HE.shape[0]
     print(f'{HT.shape=}')
     # DB conventions
-    KT = 4
-    KP *= 2
+    # KT = 4
+    # KP *= 2
+    # GK conventions
+    KT = 1
     HT = (KT*HT[...,0] * np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
     HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HE = (KE * (HE[...,0] - HE[...,1])) / NT
