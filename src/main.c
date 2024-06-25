@@ -105,6 +105,9 @@ static spin_t lattice[NT * EROWS * ECOLS];
 #define DUMMY 0xaa
 static spin_t geom[EROWS * ECOLS];
 
+static uint64_t mag_accum[EROWS * ECOLS];
+static uint64_t mag_n = 0;
+
 
 static inline int ind_tri(int t, int i, int j) {
   assert(t < NT && i < NROWS && j < 2*NCOLS);
@@ -133,7 +136,7 @@ static inline int wrap_t(int t) {
 }
 
 
-typedef enum {OBC, PBC} bc_t;
+typedef enum {OBC, PBC, RHOMB} bc_t;
 typedef enum {COLD, HOT} init_t;
 
 static void init_geom_obc() {
@@ -142,6 +145,33 @@ static void init_geom_obc() {
     for (int y = 0; y < ECOLS; ++y) {
       int i = x*ECOLS + y;
       if (x == EROWS-1 || y >= ECOLS-3) {
+        geom[i] = false;
+      }
+    }
+  }
+}
+
+static void init_geom_rhomb() {
+  // fix left and bottom zones staggered
+  assert(NROWS % 2 == 0);
+  for (int x = 0; x < EROWS; ++x) {
+    // const int par = (x/2) % 2;
+    for (int y = 0; y < ECOLS; ++y) {
+      int i = x*ECOLS + y;
+      // trim top right tail
+      if (x == 0 && y >= ECOLS-3) {
+        geom[i] = false;
+      }
+      // trim bottom left tail
+      else if (x == EROWS-4 && y < 2) {
+        geom[i] = false;
+      }
+      // last 3 rows clear
+      else if (x >= EROWS-3) {
+        geom[i] = false;
+      }
+      // last col clear
+      else if (y >= ECOLS-1) {
         geom[i] = false;
       }
     }
@@ -170,6 +200,9 @@ static int init_geom(bc_t bc_kind) {
   }
   else if (bc_kind == PBC) {
     init_geom_pbc();
+  }
+  else if (bc_kind == RHOMB) {
+    init_geom_rhomb();
   }
   else {
     return E_VALUE;
@@ -224,6 +257,7 @@ void init_lat_hot_tri() {
 
 int init_lat(init_t init_kind) {
   memset(lattice, 0xff, sizeof(lattice));
+  memset(mag_accum, 0.0, sizeof(mag_accum));
   if (init_kind == COLD) {
     init_lat_cold();
   }
@@ -474,6 +508,7 @@ void flood_fill_tri(spin_t spin) {
     // TFWD
     if (bond_tfwd(bond_dirs)) {
       int tfwd = wrap_t(t+1);
+      assert(bond_tbwd(bonds.tri[tfwd][i][j]));
       if (!seen.tri[tfwd][i][j]) {
         seen.tri[tfwd][i][j] = true;
         q_push((coord_t){tfwd, i, j, 0});
@@ -482,6 +517,7 @@ void flood_fill_tri(spin_t spin) {
     // TBWD
     if (bond_tbwd(bond_dirs)) {
       int tbwd = wrap_t(t-1);
+      assert(bond_tfwd(bonds.tri[tbwd][i][j]));
       if (!seen.tri[tbwd][i][j]) {
         seen.tri[tbwd][i][j] = true;
         q_push((coord_t){tbwd, i, j, 0});
@@ -490,6 +526,7 @@ void flood_fill_tri(spin_t spin) {
     // LEFT
     if (bond_l(bond_dirs)) {
       int j_l = wrap_dj(j-1);
+      assert(bond_r(bonds.tri[t][i][j_l]));
       if (!seen.tri[t][i][j_l]) {
         seen.tri[t][i][j_l] = true;
         q_push((coord_t){t, i, j_l, 0});
@@ -498,6 +535,7 @@ void flood_fill_tri(spin_t spin) {
     // RIGHT
     if (bond_r(bond_dirs)) {
       int j_r = wrap_dj(j+1);
+      assert(bond_l(bonds.tri[t][i][j_r]));
       if (!seen.tri[t][i][j_r]) {
         seen.tri[t][i][j_r] = true;
         q_push((coord_t){t, i, j_r, 0});
@@ -507,6 +545,14 @@ void flood_fill_tri(spin_t spin) {
     if (bond_u(bond_dirs) || bond_d(bond_dirs)) {
       bool even_site = (i+j) % 2 == 0;
       int i_ud = wrap_i(even_site ? i+1 : i-1);
+      if (even_site) {
+        assert(bond_d(bond_dirs));
+        assert(bond_u(bonds.tri[t][i_ud][j]));
+      }
+      else {
+        assert(bond_u(bond_dirs));
+        assert(bond_d(bonds.tri[t][i_ud][j]));
+      }
       if (!seen.tri[t][i_ud][j]) {
         seen.tri[t][i_ud][j] = true;
         q_push((coord_t){t, i_ud, j, 0});
@@ -658,6 +704,7 @@ void flood_fill_pet(spin_t spin) {
       // TFWD
       if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
+        assert(bond_tbwd(bonds.pet_even[tfwd][i][j]));
         if (!seen.pet_even[tfwd][i][j]) {
           seen.pet_even[tfwd][i][j] = true;
           q_push((coord_t){tfwd, i, j, EVEN});
@@ -666,6 +713,7 @@ void flood_fill_pet(spin_t spin) {
       // TBWD
       if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
+        assert(bond_tfwd(bonds.pet_even[tbwd][i][j]));
         if (!seen.pet_even[tbwd][i][j]) {
           seen.pet_even[tbwd][i][j] = true;
           q_push((coord_t){tbwd, i, j, EVEN});
@@ -676,6 +724,13 @@ void flood_fill_pet(spin_t spin) {
         int j_le = wrap_dj(j-1);
         int j_lo = j/2;
         int i_l = ((i+j) % 2 == 0) ? i : wrap_i(i-1);
+        assert(bond_r(bonds.pet_even[t][i][j_le]));
+        if (i_l == i) {
+          assert(bond_u(bonds.pet_odd[t][i_l][j_lo]));
+        }
+        else {
+          assert(bond_d(bonds.pet_odd[t][i_l][j_lo]));
+        }
         if (!seen.pet_even[t][i][j_le]) {
           seen.pet_even[t][i][j_le] = true;
           q_push((coord_t){t, i, j_le, EVEN});
@@ -690,6 +745,13 @@ void flood_fill_pet(spin_t spin) {
         int j_re = wrap_dj(j+1);
         int j_ro = wrap_dj(j+1)/2;
         int i_r = ((i+j) % 2 == 0) ? wrap_i(i-1) : i;
+        assert(bond_l(bonds.pet_even[t][i][j_re]));
+        if (i_r == i) {
+          assert(bond_u(bonds.pet_odd[t][i_r][j_ro]));
+        }
+        else {
+          assert(bond_d(bonds.pet_odd[t][i_r][j_ro]));
+        }
         if (!seen.pet_even[t][i][j_re]) {
           seen.pet_even[t][i][j_re] = true;
           q_push((coord_t){t, i, j_re, EVEN});
@@ -710,6 +772,7 @@ void flood_fill_pet(spin_t spin) {
       // TFWD
       if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
+        assert(bond_tbwd(bonds.pet_odd[tfwd][i][j]));
         if (!seen.pet_odd[tfwd][i][j]) {
           seen.pet_odd[tfwd][i][j] = true;
           q_push((coord_t){tfwd, i, j, ODD});
@@ -718,6 +781,7 @@ void flood_fill_pet(spin_t spin) {
       // TBWD
       if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
+        assert(bond_tfwd(bonds.pet_odd[tbwd][i][j]));
         if (!seen.pet_odd[tbwd][i][j]) {
           seen.pet_odd[tbwd][i][j] = true;
           q_push((coord_t){tbwd, i, j, ODD});
@@ -728,6 +792,8 @@ void flood_fill_pet(spin_t spin) {
         bool even_row = i % 2 == 0;
         int j_r = wrap_dj(2*j + (even_row ? 0 : 1));
         int j_l = wrap_dj(j_r-1);
+        assert(bond_r(bonds.pet_even[t][i][j_l]));
+        assert(bond_l(bonds.pet_even[t][i][j_r]));
         if (!seen.pet_even[t][i][j_l]) {
           seen.pet_even[t][i][j_l] = true;
           q_push((coord_t){t, i, j_l, EVEN});
@@ -743,6 +809,8 @@ void flood_fill_pet(spin_t spin) {
         int j_r = wrap_dj(2*j + (even_row ? 0 : 1));
         int j_l = wrap_dj(j_r-1);
         int i_d = wrap_i(i+1);
+        assert(bond_r(bonds.pet_even[t][i_d][j_l]));
+        assert(bond_l(bonds.pet_even[t][i_d][j_r]));
         if (!seen.pet_even[t][i_d][j_l]) {
           seen.pet_even[t][i_d][j_l] = true;
           q_push((coord_t){t, i_d, j_l, EVEN});
@@ -779,21 +847,6 @@ void update_pet_spins() {
       }
     }
   }
-  // outer loop even, unfixed
-  for (int t = 0; t < NT; ++t) {
-    for (int i = 0; i < NROWS; ++i) {
-      for (int j = 0; j < 2*NCOLS; ++j) {
-        if (seen.pet_even[t][i][j]) {
-          continue;
-        }
-        seen.pet_even[t][i][j] = true;
-        assert(q_empty());
-        q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(rand_bool());
-        assert(q_empty());
-      }
-    }
-  }
   // outer loop odd, fixed
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
@@ -808,6 +861,21 @@ void update_pet_spins() {
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
         flood_fill_pet(geom[ind_pet_odd(0, i, j)]);
+        assert(q_empty());
+      }
+    }
+  }
+  // outer loop even, unfixed
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (seen.pet_even[t][i][j]) {
+          continue;
+        }
+        seen.pet_even[t][i][j] = true;
+        assert(q_empty());
+        q_push((coord_t){t, i, j, EVEN});
+        flood_fill_pet(rand_bool());
         assert(q_empty());
       }
     }
@@ -947,14 +1015,18 @@ typedef struct {
   const char* prefix;
   // derived
   int n_meas;
-  char fname_ens[STRLEN+1], fname_meta[STRLEN+1],
-    fname_HT[STRLEN+1], fname_HP[STRLEN+1], fname_HE[STRLEN+1];
+  char fname_ens[STRLEN+1];
+  char fname_meta[STRLEN+1];
+  char fname_HT[STRLEN+1];
+  char fname_HP[STRLEN+1];
+  char fname_HE[STRLEN+1];
+  char fname_M[STRLEN+1];
 } config_t;
 
 void usage(const char* prog) {
   printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
          "-i <n_iter> -s <save_freq> -m <meas_freq> "
-         "[-b (obc|pbc)] [-c (cold|hot)] [-r <seed>]\n", prog);
+         "[-b (obc|pbc|rhomb)] [-c (cold|hot)] [-r <seed>]\n", prog);
 }
 
 int parse_args(int argc, char** argv, config_t* cfg) {
@@ -1009,6 +1081,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
       }
       else if (strcmp(optarg, "obc") == 0) {
         bc_kind = OBC;
+      }
+      else if (strcmp(optarg, "rhomb") == 0) {
+        bc_kind = RHOMB;
       }
       else {
         usage(argv[0]);
@@ -1069,11 +1144,13 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   strncpy(cfg->fname_HT, prefix, STRLEN);
   strncpy(cfg->fname_HP, prefix, STRLEN);
   strncpy(cfg->fname_HE, prefix, STRLEN);
+  strncpy(cfg->fname_M, prefix, STRLEN);
   strncpy(cfg->fname_ens + len, ".ens.dat", STRLEN-len);
   strncpy(cfg->fname_meta + len, ".meta.dat", STRLEN-len);
   strncpy(cfg->fname_HT + len, ".HT.dat", STRLEN-len);
   strncpy(cfg->fname_HP + len, ".HP.dat", STRLEN-len);
   strncpy(cfg->fname_HE + len, ".HE.dat", STRLEN-len);
+  strncpy(cfg->fname_M + len, ".M.dat", STRLEN-len);
 
   // derived
   if (cfg->meas_freq > 1) {
@@ -1122,7 +1199,9 @@ int main(int argc, char** argv) {
   FILE *f_HT = fopen(cfg.fname_HT, "wb");
   FILE *f_HP = fopen(cfg.fname_HP, "wb");
   FILE *f_HE = fopen(cfg.fname_HE, "wb");
-  if (f == NULL || f_meta == NULL || f_HT == NULL || f_HP == NULL || f_HE == NULL) {
+  FILE *f_M = fopen(cfg.fname_M, "wb");
+  if (f == NULL || f_meta == NULL || f_HT == NULL ||
+      f_HP == NULL || f_HE == NULL || f_M == NULL)  {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
@@ -1162,12 +1241,20 @@ int main(int argc, char** argv) {
     sample_pet_bonds();
     update_pet_spins();
 
+    // accumulate
+    for (int t = 0; t < NT; ++t) {
+      for (int i = 0; i < EROWS * ECOLS; ++i) {
+        mag_accum[i] += lattice[t * EROWS * ECOLS + i];
+      }
+      mag_n++;
+    }
+    // measure
     if ((i+1) % cfg.meas_freq == 0) {
       const int ind = ((i+1) / cfg.meas_freq) - 1;
       measure_HT(&HT[2*ind], &HT[2*ind+1]);
       measure_HP_HE(&HP[2*ind], &HP[2*ind+1], &HE[2*ind], &HE[2*ind+1]);
     }
-
+    // save
     if ((i+1) % cfg.save_freq == 0) {
       write_lattice(f);
     }
@@ -1177,6 +1264,12 @@ int main(int argc, char** argv) {
   fwrite(HP, sizeof(int), len_Hi, f_HP);
   fwrite(HE, sizeof(int), len_Hi, f_HE);
 
+  double mag[EROWS * ECOLS];
+  for (int i = 0; i < EROWS * ECOLS; ++i) {
+    mag[i] = mag_accum[i] / (double)mag_n;
+  }
+  fwrite(mag, sizeof(double), EROWS*ECOLS, f_M);
+
   free(HT);
   free(HP);
   free(HE);
@@ -1184,4 +1277,5 @@ int main(int argc, char** argv) {
   fclose(f_HT);
   fclose(f_HP);
   fclose(f_HE);
+  fclose(f_M);
 }

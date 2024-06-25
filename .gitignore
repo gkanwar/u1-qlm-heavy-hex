@@ -57,3 +57,6 @@ bin/
 # Data files
 *.npy
 *.dat
+
+# Plots
+*.pdf
