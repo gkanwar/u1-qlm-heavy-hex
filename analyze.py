@@ -29,6 +29,7 @@ def main():
     print(f'Seed: {seed=}')
     geom = np.frombuffer(meta_bytes[h_size:], dtype=np.uint8).reshape(NX, NY)
     ens = np.fromfile(f'{prefix}.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
+    m = np.fromfile(f'{prefix}.M.dat', dtype=np.float64).reshape(NX, NY)
     N_FREE_TRI = np.sum(geom[::2,::2] == 0xff)
     N_FREE_PET = np.sum(geom[1::2,:] == 0xff) + np.sum(geom[:,1::2] == 0xff)
     print(f'Geom:\n{geom}')
@@ -51,14 +52,32 @@ def main():
     HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HE = (KE * (HE[...,0] - HE[...,1])) / NT
 
+    cmap = plt.get_cmap('RdBu')
+    cmap.set_bad(color='k')
+
+    fig, ax = plt.subplots(1,1)
+    m -= 0.5
+    m[geom != 0xff] = float('nan')
+    print('Top row\n', m[0,1::2])
+    print('Bot row\n', m[-4,1::2])
+    cs = ax.imshow(m, vmin=-0.5, vmax=0.5, cmap=cmap)
+    ax.set_aspect(1)
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs)
+    fig.savefig(f'{prefix}.Mx.pdf')
+
     fig, ax = plt.subplots(1,1)
     ens_f = ens.astype(np.float64)
     ens_f[:,:,geom != 0xff] = float('nan')
-    ax.imshow(ens_f.mean(axis=(0, 1)))
+    cs = ax.imshow(ens_f.mean(axis=(0, 1)) - 0.5, vmin=-0.5, vmax=0.5, cmap=cmap)
     ax.set_aspect(1)
-    fig.savefig(f'{prefix}.Mx.pdf')
+    fig.colorbar(cs)
+    fig.savefig(f'{prefix}.Mx_ens.pdf')
 
     MA, MB, MP = measure_M(ens, geom)
+    # MA, MB, MP = split_M(m, geom)
     MT = (MA + MB)/2
 
     fig, ax = plt.subplots(1,1)
@@ -106,6 +125,37 @@ def get_sublattice(x, y):
     else:
         assert (x+y) % 4 == 0
         return 'B'
+
+def split_M(mag, geom):
+    MA = 0
+    MB = 0
+    MP = 0
+    nA = 0
+    nB = 0
+    nP = 0
+    for x in range(geom.shape[0]):
+        for y in range(geom.shape[1]):
+            if geom[x,y] != 0xff:
+                continue
+            sub = get_sublattice(x,y)
+            m = mag[x,y]
+            if sub == 'A':
+                MA += m
+                nA += 1
+            elif sub == 'B':
+                MB += m
+                nB += 1
+            else:
+                assert sub == 'P'
+                MP += m
+                nP += 1
+    MA /= nA
+    MB /= nB
+    MP /= nP
+    MA -= 0.5
+    MB -= 0.5
+    MP -= 0.5
+    return MA, MB, MP
 
 def measure_M(ens, geom):
     MA = np.zeros(ens.shape[0], dtype=np.float64)
