@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-std=gnu99
+CFLAGS=-std=gnu99 -Wall -Wextra
 CFLAGS_DBG=-O0 -g $(CFLAGS)
 CFLAGS_REL=-O3 -DNDEBUG $(CFLAGS)
 LDFLAGS=-lm
@@ -26,4 +26,4 @@ ${BIN}/${PROG}.$(NT)_$(NROWS)_$(NCOLS).release: ${SRCS}
 
 .PHONY: all debug release clean
 clean:
-	$(RM) cluster
+	$(RM) ${BIN}/*

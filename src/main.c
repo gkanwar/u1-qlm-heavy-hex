@@ -476,7 +476,7 @@ void flood_fill_tri(spin_t spin) {
       int tfwd = wrap_t(t+1);
       if (!seen.tri[tfwd][i][j]) {
         seen.tri[tfwd][i][j] = true;
-        q_push((coord_t){tfwd, i, j});
+        q_push((coord_t){tfwd, i, j, 0});
       }
     }
     // TBWD
@@ -484,7 +484,7 @@ void flood_fill_tri(spin_t spin) {
       int tbwd = wrap_t(t-1);
       if (!seen.tri[tbwd][i][j]) {
         seen.tri[tbwd][i][j] = true;
-        q_push((coord_t){tbwd, i, j});
+        q_push((coord_t){tbwd, i, j, 0});
       }
     }
     // LEFT
@@ -492,7 +492,7 @@ void flood_fill_tri(spin_t spin) {
       int j_l = wrap_dj(j-1);
       if (!seen.tri[t][i][j_l]) {
         seen.tri[t][i][j_l] = true;
-        q_push((coord_t){t, i, j_l});
+        q_push((coord_t){t, i, j_l, 0});
       }
     }
     // RIGHT
@@ -500,7 +500,7 @@ void flood_fill_tri(spin_t spin) {
       int j_r = wrap_dj(j+1);
       if (!seen.tri[t][i][j_r]) {
         seen.tri[t][i][j_r] = true;
-        q_push((coord_t){t, i, j_r});
+        q_push((coord_t){t, i, j_r, 0});
       }
     }
     // UP/DOWN
@@ -509,7 +509,7 @@ void flood_fill_tri(spin_t spin) {
       int i_ud = wrap_i(even_site ? i+1 : i-1);
       if (!seen.tri[t][i_ud][j]) {
         seen.tri[t][i_ud][j] = true;
-        q_push((coord_t){t, i_ud, j});
+        q_push((coord_t){t, i_ud, j, 0});
       }
     }
   }
@@ -529,7 +529,7 @@ void update_tri_spins() {
         }
         seen.tri[t][i][j] = true;
         assert(q_empty());
-        q_push((coord_t){t, i, j});
+        q_push((coord_t){t, i, j, 0});
         flood_fill_tri(geom[ind_tri(0, i, j)]);
         assert(q_empty());
       }
@@ -544,7 +544,7 @@ void update_tri_spins() {
         }
         seen.tri[t][i][j] = true;
         assert(q_empty());
-        q_push((coord_t){t, i, j});
+        q_push((coord_t){t, i, j, 0});
         flood_fill_tri(rand_bool());
         assert(q_empty());
       }
@@ -936,7 +936,7 @@ void write_lattice(FILE *f) {
 }
 
 // const size_t STRLEN = 256;
-#define STRLEN 256
+#define STRLEN 255
 
 typedef struct {
   double dt, KP, KE;
@@ -947,8 +947,8 @@ typedef struct {
   const char* prefix;
   // derived
   int n_meas;
-  char fname_ens[STRLEN], fname_meta[STRLEN],
-    fname_HT[STRLEN], fname_HP[STRLEN], fname_HE[STRLEN];
+  char fname_ens[STRLEN+1], fname_meta[STRLEN+1],
+    fname_HT[STRLEN+1], fname_HP[STRLEN+1], fname_HE[STRLEN+1];
 } config_t;
 
 void usage(const char* prog) {
@@ -1097,7 +1097,7 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   assert(ret == E_OK);
   init_lat_apply_geom();
 
-  return E_OK;
+  return ret;
 }
 
 typedef struct {

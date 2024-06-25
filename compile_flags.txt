@@ -1,2 +1,6 @@
 -std=gnu99
 -Wall
+-Wextra
+-DNROWS=2
+-DNCOLS=2
+-DNT=64
