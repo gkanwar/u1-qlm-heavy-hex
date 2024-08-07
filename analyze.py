@@ -52,7 +52,7 @@ def main():
     HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HE = (KE * (HE[...,0] - HE[...,1])) / NT
 
-    cmap = plt.get_cmap('RdBu')
+    cmap = plt.get_cmap('RdBu').copy()
     cmap.set_bad(color='k')
 
     fig, ax = plt.subplots(1,1)
