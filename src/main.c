@@ -107,6 +107,13 @@ static spin_t geom[EROWS * ECOLS];
 
 static uint64_t mag_accum[EROWS * ECOLS];
 static uint64_t mag_n = 0;
+static uint64_t HT_plus_accum[EROWS * ECOLS];
+static uint64_t HT_minus_accum[EROWS * ECOLS];
+static uint64_t HP_plus_accum[EROWS * ECOLS];
+static uint64_t HP_minus_accum[EROWS * ECOLS];
+static uint64_t HE_plus_accum[EROWS * ECOLS];
+static uint64_t HE_minus_accum[EROWS * ECOLS];
+static uint64_t H_n = 0;
 
 
 static inline int ind_tri(int t, int i, int j) {
@@ -136,7 +143,7 @@ static inline int wrap_t(int t) {
 }
 
 
-typedef enum {OBC, PBC, RHOMB} bc_t;
+typedef enum {OBC, PBC, RHOMB, RHOMB_STRING} bc_t;
 typedef enum {COLD, HOT} init_t;
 
 static void init_geom_obc() {
@@ -151,7 +158,7 @@ static void init_geom_obc() {
   }
 }
 
-static void init_geom_rhomb() {
+static void init_geom_rhomb(bool with_string) {
   // fix left and bottom zones staggered
   assert(NROWS % 2 == 0);
   for (int x = 0; x < EROWS; ++x) {
@@ -159,8 +166,8 @@ static void init_geom_rhomb() {
     for (int y = 0; y < ECOLS; ++y) {
       int i = x*ECOLS + y;
       // trim top right tail
-      if (x == 0 && y >= ECOLS-3) {
-        geom[i] = false;
+      if (x == 0 && y >= ECOLS-7) {
+        geom[i] = with_string;
       }
       // trim bottom left tail
       else if (x == EROWS-4 && y < 2) {
@@ -168,11 +175,21 @@ static void init_geom_rhomb() {
       }
       // last 3 rows clear
       else if (x >= EROWS-3) {
-        geom[i] = false;
+        if (x >= EROWS-1) {
+          geom[i] = with_string;
+        }
+        else {
+          geom[i] = false;
+        }
       }
-      // last col clear
-      else if (y >= ECOLS-1) {
-        geom[i] = false;
+      // last 5 cols clear
+      else if (y >= ECOLS-5) {
+        if (y >= ECOLS-3) {
+          geom[i] = false;
+        }
+        else {
+          geom[i] = with_string;
+        }
       }
     }
   }
@@ -202,7 +219,10 @@ static int init_geom(bc_t bc_kind) {
     init_geom_pbc();
   }
   else if (bc_kind == RHOMB) {
-    init_geom_rhomb();
+    init_geom_rhomb(false);
+  }
+  else if (bc_kind == RHOMB_STRING) {
+    init_geom_rhomb(true);
   }
   else {
     return E_VALUE;
@@ -258,6 +278,12 @@ void init_lat_hot_tri() {
 int init_lat(init_t init_kind) {
   memset(lattice, 0xff, sizeof(lattice));
   memset(mag_accum, 0.0, sizeof(mag_accum));
+  memset(HT_plus_accum, 0.0, sizeof(HT_plus_accum));
+  memset(HT_minus_accum, 0.0, sizeof(HT_minus_accum));
+  memset(HP_plus_accum, 0.0, sizeof(HP_plus_accum));
+  memset(HP_minus_accum, 0.0, sizeof(HP_minus_accum));
+  memset(HE_plus_accum, 0.0, sizeof(HE_plus_accum));
+  memset(HE_minus_accum, 0.0, sizeof(HE_minus_accum));
   if (init_kind == COLD) {
     init_lat_cold();
   }
@@ -897,36 +923,69 @@ void update_pet_spins() {
   }
 }
 
-void measure_HP_HE(int* HP_plus, int* HP_minus, int* HE_plus, int* HE_minus) {
-  int tot_HP_plus = 0;
-  int tot_HP_minus = 0;
-  int tot_HE_plus = 0;
-  int tot_HE_minus = 0;
+void measure_HP_HE_pet_even(
+    int t, int i, int j,
+    uint64_t* HP_plus, uint64_t* HP_minus, uint64_t* HE_plus, uint64_t* HE_minus) {
+  if (geom[ind_pet_even(0, i, j)] != FREE) {
+    return;
+  }
+  // relevant petals
+  bool pet = lattice[ind_pet_even(t, i, j)];
+  int t_fwd = wrap_t(t+1);
+  bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
+  int j_l = j;
+  int j_r = wrap_dj(j+1);
+
+  // relevant triangles
+  bool tri_l = lattice[ind_tri(t, i, j_l)];
+  bool tri_r = lattice[ind_tri(t, i, j_r)];
+
+  bool delta_b = (pet == pet_fwd);
+  bool delta_a = (tri_l == tri_r);
+
+  *HP_plus += delta_b && delta_a;
+  *HP_minus += (!delta_b) && delta_a;
+  *HE_plus += delta_a;
+  *HE_minus += !delta_a;
+}
+
+void measure_HP_HE_pet_odd(
+    int t, int i, int j,
+    uint64_t* HP_plus, uint64_t* HP_minus, uint64_t* HE_plus, uint64_t* HE_minus) {
+  if (geom[ind_pet_odd(0, i, j)] != FREE) {
+    return;
+  }
+  // relevant petals
+  bool pet = lattice[ind_pet_odd(t, i, j)];
+  int t_fwd = wrap_t(t+1);
+  bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
+  int i_u = i;
+  int i_d = wrap_i(i+1);
+  int j_even = 2*j + (i % 2);
+
+  // relevant triangles
+  bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+  bool tri_d = lattice[ind_tri(t, i_d, j_even)];
+
+  bool delta_b = (pet == pet_fwd);
+  bool delta_a = (tri_u == tri_d);
+
+  *HP_plus += delta_b && delta_a;
+  *HP_minus += (!delta_b) && delta_a;
+  *HE_plus += delta_a;
+  *HE_minus += !delta_a;
+}
+
+void measure_HP_HE(uint64_t* HP_plus, uint64_t* HP_minus, uint64_t* HE_plus, uint64_t* HE_minus) {
+  uint64_t tot_HP_plus = 0;
+  uint64_t tot_HP_minus = 0;
+  uint64_t tot_HE_plus = 0;
+  uint64_t tot_HE_minus = 0;
   // even petals
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
-        if (geom[ind_pet_even(0, i, j)] != FREE) {
-          continue;
-        }
-        // relevant petals
-        bool pet = lattice[ind_pet_even(t, i, j)];
-        int t_fwd = wrap_t(t+1);
-        bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
-        int j_l = j;
-        int j_r = wrap_dj(j+1);
-
-        // relevant triangles
-        bool tri_l = lattice[ind_tri(t, i, j_l)];
-        bool tri_r = lattice[ind_tri(t, i, j_r)];
-
-        bool delta_b = (pet == pet_fwd);
-        bool delta_a = (tri_l == tri_r);
-
-        tot_HP_plus += delta_b && delta_a;
-        tot_HP_minus += (!delta_b) && delta_a;
-        tot_HE_plus += delta_a;
-        tot_HE_minus += !delta_a;
+        measure_HP_HE_pet_even(t, i, j, &tot_HP_plus, &tot_HP_minus, &tot_HE_plus, &tot_HE_minus);
       }
     }
   }
@@ -934,28 +993,7 @@ void measure_HP_HE(int* HP_plus, int* HP_minus, int* HE_plus, int* HE_minus) {
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
-        if (geom[ind_pet_odd(0, i, j)] != FREE) {
-          continue;
-        }
-        // relevant petals
-        bool pet = lattice[ind_pet_odd(t, i, j)];
-        int t_fwd = wrap_t(t+1);
-        bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
-        int i_u = i;
-        int i_d = wrap_i(i+1);
-        int j_even = 2*j + (i % 2);
-
-        // relevant triangles
-        bool tri_u = lattice[ind_tri(t, i_u, j_even)];
-        bool tri_d = lattice[ind_tri(t, i_d, j_even)];
-
-        bool delta_b = (pet == pet_fwd);
-        bool delta_a = (tri_u == tri_d);
-
-        tot_HP_plus += delta_b && delta_a;
-        tot_HP_minus += (!delta_b) && delta_a;
-        tot_HE_plus += delta_a;
-        tot_HE_minus += !delta_a;
+        measure_HP_HE_pet_odd(t, i, j, &tot_HP_plus, &tot_HP_minus, &tot_HE_plus, &tot_HE_minus);
       }
     }
   }
@@ -965,37 +1003,77 @@ void measure_HP_HE(int* HP_plus, int* HP_minus, int* HE_plus, int* HE_minus) {
   *HE_minus = tot_HE_minus;
 }
 
-void measure_HT(int* HT_plus, int* HT_minus) {
-  int tot_HT_plus = 0;
-  int tot_HT_minus = 0;
+void measure_HT_tri(int t, int i, int j, uint64_t* HT_plus, uint64_t* HT_minus) {
+  if (geom[ind_tri(0, i, j)] != FREE) {
+    return;
+  }
+  // relevant triangles
+  bool tri = lattice[ind_tri(t, i, j)];
+  int t_fwd = wrap_t(t+1);
+  bool tri_fwd = lattice[ind_tri(t_fwd, i, j)];
+  int j_l = wrap_dj(j-1);
+  int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
+
+  // relevant petals
+  int j_odd = j/2;
+  bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
+  bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
+  bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+
+  bool delta_a = (tri == tri_fwd);
+  bool delta_b = (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
+  *HT_plus += delta_a && delta_b;
+  *HT_minus += (!delta_a) && delta_b;
+}
+
+void measure_HT(uint64_t* HT_plus, uint64_t* HT_minus) {
+  uint64_t tot_HT_plus = 0;
+  uint64_t tot_HT_minus = 0;
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
-        if (geom[ind_tri(0, i, j)] != FREE) {
-          continue;
-        }
-        // relevant triangles
-        bool tri = lattice[ind_tri(t, i, j)];
-        int t_fwd = wrap_t(t+1);
-        bool tri_fwd = lattice[ind_tri(t_fwd, i, j)];
-        int j_l = wrap_dj(j-1);
-        int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
-
-        // relevant petals
-        int j_odd = j/2;
-        bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
-        bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
-        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
-
-        bool delta_a = (tri == tri_fwd);
-        bool delta_b = (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
-        tot_HT_plus += delta_a && delta_b;
-        tot_HT_minus += (!delta_a) && delta_b;
+        measure_HT_tri(t, i, j, &tot_HT_plus, &tot_HT_minus);
       }
     }
   }
   *HT_plus = tot_HT_plus;
   *HT_minus = tot_HT_minus;
+}
+
+void measure_MT_MP(uint64_t* MT, uint64_t* MP) {
+  uint64_t tot_MT = 0;
+  uint64_t tot_MP = 0;
+  for (int t = 0; t < NT; ++t) {
+    // triangles
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (geom[ind_tri(0, i, j)] != FREE) {
+          continue;
+        }
+        tot_MT += lattice[ind_tri(t, i, j)];
+      }
+    }
+    // even petals
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < 2*NCOLS; ++j) {
+        if (geom[ind_pet_even(0, i, j)] != FREE) {
+          continue;
+        }
+        tot_MP += lattice[ind_pet_even(t, i, j)];
+      }
+    }
+    // odd petals
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        if (geom[ind_pet_odd(0, i, j)] != FREE) {
+          continue;
+        }
+        tot_MP += lattice[ind_pet_odd(t, i, j)];
+      }
+    }
+  }
+  *MT = tot_MT;
+  *MP = tot_MP;
 }
 
 void write_lattice(FILE *f) {
@@ -1020,13 +1098,16 @@ typedef struct {
   char fname_HT[STRLEN+1];
   char fname_HP[STRLEN+1];
   char fname_HE[STRLEN+1];
-  char fname_M[STRLEN+1];
+  char fname_MT[STRLEN+1];
+  char fname_MP[STRLEN+1];
+  char fname_Mx[STRLEN+1];
+  char fname_Hx[STRLEN+1];
 } config_t;
 
 void usage(const char* prog) {
   printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
          "-i <n_iter> -s <save_freq> -m <meas_freq> "
-         "[-b (obc|pbc|rhomb)] [-c (cold|hot)] [-r <seed>]\n", prog);
+         "[-b (obc|pbc|rhomb|rhomb_str)] [-c (cold|hot)] [-r <seed>]\n", prog);
 }
 
 int parse_args(int argc, char** argv, config_t* cfg) {
@@ -1084,6 +1165,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
       }
       else if (strcmp(optarg, "rhomb") == 0) {
         bc_kind = RHOMB;
+      }
+      else if (strcmp(optarg, "rhomb_str") == 0) {
+        bc_kind = RHOMB_STRING;
       }
       else {
         usage(argv[0]);
@@ -1144,13 +1228,19 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   strncpy(cfg->fname_HT, prefix, STRLEN);
   strncpy(cfg->fname_HP, prefix, STRLEN);
   strncpy(cfg->fname_HE, prefix, STRLEN);
-  strncpy(cfg->fname_M, prefix, STRLEN);
+  strncpy(cfg->fname_MT, prefix, STRLEN);
+  strncpy(cfg->fname_MP, prefix, STRLEN);
+  strncpy(cfg->fname_Mx, prefix, STRLEN);
+  strncpy(cfg->fname_Hx, prefix, STRLEN);
   strncpy(cfg->fname_ens + len, ".ens.dat", STRLEN-len);
   strncpy(cfg->fname_meta + len, ".meta.dat", STRLEN-len);
   strncpy(cfg->fname_HT + len, ".HT.dat", STRLEN-len);
   strncpy(cfg->fname_HP + len, ".HP.dat", STRLEN-len);
   strncpy(cfg->fname_HE + len, ".HE.dat", STRLEN-len);
-  strncpy(cfg->fname_M + len, ".M.dat", STRLEN-len);
+  strncpy(cfg->fname_MT + len, ".MT.dat", STRLEN-len);
+  strncpy(cfg->fname_MP + len, ".MP.dat", STRLEN-len);
+  strncpy(cfg->fname_Mx + len, ".Mx.dat", STRLEN-len);
+  strncpy(cfg->fname_Hx + len, ".Hx.dat", STRLEN-len);
 
   // derived
   if (cfg->meas_freq > 1) {
@@ -1199,9 +1289,14 @@ int main(int argc, char** argv) {
   FILE *f_HT = fopen(cfg.fname_HT, "wb");
   FILE *f_HP = fopen(cfg.fname_HP, "wb");
   FILE *f_HE = fopen(cfg.fname_HE, "wb");
-  FILE *f_M = fopen(cfg.fname_M, "wb");
-  if (f == NULL || f_meta == NULL || f_HT == NULL ||
-      f_HP == NULL || f_HE == NULL || f_M == NULL)  {
+  FILE *f_MT = fopen(cfg.fname_MT, "wb");
+  FILE *f_MP = fopen(cfg.fname_MP, "wb");
+  FILE *f_Mx = fopen(cfg.fname_Mx, "wb");
+  FILE *f_Hx = fopen(cfg.fname_Hx, "wb");
+  if (f == NULL || f_meta == NULL ||
+      f_HT == NULL || f_HP == NULL || f_HE == NULL ||
+      f_MT == NULL || f_MP == NULL ||
+      f_Mx == NULL || f_Hx == NULL)  {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
@@ -1218,9 +1313,13 @@ int main(int argc, char** argv) {
 
   // Hamiltonian terms stored as pairs [(H+, H-)[0], (H+, H-)[1], ...]
   size_t len_Hi = 2 * cfg.n_meas;
-  int* HT = malloc(len_Hi * sizeof(int));
-  int* HP = malloc(len_Hi * sizeof(int));
-  int* HE = malloc(len_Hi * sizeof(int));
+  uint64_t* HT = malloc(len_Hi * sizeof(uint64_t));
+  uint64_t* HP = malloc(len_Hi * sizeof(uint64_t));
+  uint64_t* HE = malloc(len_Hi * sizeof(uint64_t));
+  // Raw magnetization
+  size_t len_Mi = cfg.n_meas;
+  uint64_t* MT = malloc(len_Mi * sizeof(uint64_t));
+  uint64_t* MP = malloc(len_Mi * sizeof(uint64_t));
 
   clock_t start = clock();
   for (int i = 0; i < cfg.n_iter; ++i) {
@@ -1241,18 +1340,49 @@ int main(int argc, char** argv) {
     sample_pet_bonds();
     update_pet_spins();
 
-    // accumulate
+    // accumulate Mx
     for (int t = 0; t < NT; ++t) {
       for (int i = 0; i < EROWS * ECOLS; ++i) {
         mag_accum[i] += lattice[t * EROWS * ECOLS + i];
       }
       mag_n++;
     }
+    // accumulate Hx
+    for (int t = 0; t < NT; ++t) {
+      // triangles (HT)
+      for (int i = 0; i < NROWS; ++i) {
+        for (int j = 0; j < 2*NCOLS; ++j) {
+          int ind = ind_tri(0, i, j);
+          measure_HT_tri(
+              t, i, j, &HT_plus_accum[ind], &HT_minus_accum[ind]);
+        }
+      }
+      // even petals (HP, HE)
+      for (int i = 0; i < NROWS; ++i) {
+        for (int j = 0; j < 2*NCOLS; ++j) {
+          int ind = ind_pet_even(0, i, j);
+          measure_HP_HE_pet_even(
+              t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
+              &HE_plus_accum[ind], &HE_minus_accum[ind]);
+        }
+      }
+      // odd petals (HP, HE)
+      for (int i = 0; i < NROWS; ++i) {
+        for (int j = 0; j < NCOLS; ++j) {
+          int ind = ind_pet_odd(0, i, j);
+          measure_HP_HE_pet_odd(
+              t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
+              &HE_plus_accum[ind], &HE_minus_accum[ind]);
+        }
+      }
+      H_n++;
+    }
     // measure
     if ((i+1) % cfg.meas_freq == 0) {
       const int ind = ((i+1) / cfg.meas_freq) - 1;
       measure_HT(&HT[2*ind], &HT[2*ind+1]);
       measure_HP_HE(&HP[2*ind], &HP[2*ind+1], &HE[2*ind], &HE[2*ind+1]);
+      measure_MT_MP(&MT[ind], &MP[ind]);
     }
     // save
     if ((i+1) % cfg.save_freq == 0) {
@@ -1263,19 +1393,42 @@ int main(int argc, char** argv) {
   fwrite(HT, sizeof(int), len_Hi, f_HT);
   fwrite(HP, sizeof(int), len_Hi, f_HP);
   fwrite(HE, sizeof(int), len_Hi, f_HE);
+  fwrite(MT, sizeof(int), len_Mi, f_MT);
+  fwrite(MP, sizeof(int), len_Mi, f_MP);
 
   double mag[EROWS * ECOLS];
   for (int i = 0; i < EROWS * ECOLS; ++i) {
     mag[i] = mag_accum[i] / (double)mag_n;
   }
-  fwrite(mag, sizeof(double), EROWS*ECOLS, f_M);
+  fwrite(mag, sizeof(double), EROWS*ECOLS, f_Mx);
+
+  double HT_plus[EROWS * ECOLS], HT_minus[EROWS * ECOLS];
+  double HP_plus[EROWS * ECOLS], HP_minus[EROWS * ECOLS];
+  double HE_plus[EROWS * ECOLS], HE_minus[EROWS * ECOLS];
+  for (int i = 0; i < EROWS * ECOLS; ++i) {
+    HT_plus[i] = HT_plus_accum[i] / (double)H_n;
+    HT_minus[i] = HT_minus_accum[i] / (double)H_n;
+    HP_plus[i] = HP_plus_accum[i] / (double)H_n;
+    HP_minus[i] = HP_minus_accum[i] / (double)H_n;
+    HE_plus[i] = HE_plus_accum[i] / (double)H_n;
+    HE_minus[i] = HE_minus_accum[i] / (double)H_n;
+  }
+  fwrite(HT_plus, sizeof(double), EROWS*ECOLS, f_Hx);
+  fwrite(HT_minus, sizeof(double), EROWS*ECOLS, f_Hx);
+  fwrite(HP_plus, sizeof(double), EROWS*ECOLS, f_Hx);
+  fwrite(HP_minus, sizeof(double), EROWS*ECOLS, f_Hx);
+  fwrite(HE_plus, sizeof(double), EROWS*ECOLS, f_Hx);
+  fwrite(HE_minus, sizeof(double), EROWS*ECOLS, f_Hx);
 
   free(HT);
   free(HP);
   free(HE);
+  free(MT);
+  free(MP);
   fclose(f);
   fclose(f_HT);
   fclose(f_HP);
   fclose(f_HE);
-  fclose(f_M);
+  fclose(f_Mx);
+  fclose(f_Hx);
 }

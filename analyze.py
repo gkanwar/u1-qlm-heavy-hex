@@ -28,57 +28,141 @@ def main():
     print(f'Shape: {NT=} {NX=} {NY=}')
     print(f'Seed: {seed=}')
     geom = np.frombuffer(meta_bytes[h_size:], dtype=np.uint8).reshape(NX, NY)
-    ens = np.fromfile(f'{prefix}.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
-    m = np.fromfile(f'{prefix}.M.dat', dtype=np.float64).reshape(NX, NY)
-    N_FREE_TRI = np.sum(geom[::2,::2] == 0xff)
-    N_FREE_PET = np.sum(geom[1::2,:] == 0xff) + np.sum(geom[:,1::2] == 0xff)
+    # ens = np.fromfile(f'{prefix}.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
+    mx = np.fromfile(f'{prefix}.Mx.dat', dtype=np.float64).reshape(NX, NY)
+    HTx, HPx, HEx = np.fromfile(f'{prefix}.Hx.dat', dtype=np.float64).reshape(3, 2, NX, NY)
+    free_tri_mask = np.zeros_like(geom)
+    free_tri_mask[::2,::2][geom[::2,::2] == 0xff] = 1
+    free_pet_mask = np.zeros_like(geom)
+    free_pet_mask[1::2,:][geom[1::2,:] == 0xff] = 1
+    free_pet_mask[:,1::2][geom[:,1::2] == 0xff] = 1
+    N_FREE_TRI = np.sum(free_tri_mask)
+    N_FREE_PET = np.sum(free_pet_mask)
     print(f'Geom:\n{geom}')
     print(f'{N_FREE_TRI=} {N_FREE_PET=}')
 
-    print(ens[0,0])
-    print(ens[1,0])
-    print(ens[2,0])
-    print(ens[3,0])
+    # print(ens[0,0])
+    # print(ens[1,0])
+    # print(ens[2,0])
+    # print(ens[3,0])
     
-    HT = np.fromfile(f'{prefix}.HT.dat', dtype=np.int32).reshape(-1, 2)
-    HP = np.fromfile(f'{prefix}.HP.dat', dtype=np.int32).reshape(-1, 2)
-    HE = np.fromfile(f'{prefix}.HE.dat', dtype=np.int32).reshape(-1, 2)
+    HT = np.fromfile(f'{prefix}.HT.dat', dtype=np.int64).reshape(-1, 2)
+    HP = np.fromfile(f'{prefix}.HP.dat', dtype=np.int64).reshape(-1, 2)
+    HE = np.fromfile(f'{prefix}.HE.dat', dtype=np.int64).reshape(-1, 2)
     assert HT.shape[0] == HP.shape[0] == HE.shape[0]
     print(f'{HT.shape=}')
     # DB conventions
     KT = 4
     KP *= 2
-    HT = (KT*HT[...,0] * np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
+    HT = (KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
     HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HE = (KE * (HE[...,0] - HE[...,1])) / NT
+
+    HTx = (KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
+    HPx = (KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
+    HEx = (KE * (HEx[0] - HEx[1])) / NT
+    Hx = HTx + HPx + HEx
+    HTx[free_tri_mask != 1] = float('nan')
+    HPx[free_pet_mask != 1] = float('nan')
+    HEx[free_pet_mask != 1] = float('nan')
+    Hx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
 
     cmap = plt.get_cmap('RdBu').copy()
     cmap.set_bad(color='k')
 
-    fig, ax = plt.subplots(1,1)
-    m -= 0.5
-    m[geom != 0xff] = float('nan')
-    print('Top row\n', m[0,1::2])
-    print('Bot row\n', m[-4,1::2])
-    cs = ax.imshow(m, vmin=-0.5, vmax=0.5, cmap=cmap)
+    MTx = mx - 0.5
+    MTx[free_tri_mask != 1] = float('nan')
+    MPx = mx - 0.5
+    MPx[free_pet_mask != 1] = float('nan')
+
+    fig, axes = plt.subplots(
+        1, 4, layout='compressed', figsize=(10,3),
+        gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]), squeeze=False)
+    ax = axes[0,0]
+    cax = axes[0,1]
+    ax.set_title(r'$M_T(x)$')
+    vmax = np.nanmax(np.abs(MTx))
+    cs = ax.imshow(MTx, cmap=cmap, vmin=-vmax, vmax=vmax, interpolation='nearest')
     ax.set_aspect(1)
     bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
     values = geom[bounds]
     ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
-    fig.colorbar(cs)
-    fig.savefig(f'{prefix}.Mx.pdf')
-
-    fig, ax = plt.subplots(1,1)
-    ens_f = ens.astype(np.float64)
-    ens_f[:,:,geom != 0xff] = float('nan')
-    cs = ax.imshow(ens_f.mean(axis=(0, 1)) - 0.5, vmin=-0.5, vmax=0.5, cmap=cmap)
+    fig.colorbar(cs, cax=cax)
+    ax = axes[0,2]
+    cax = axes[0,3]
+    ax.set_title(r'$M_P(x)$')
+    vmax = np.nanmax(np.abs(MPx))
+    cs = ax.imshow(MPx, cmap=cmap, vmin=-vmax, vmax=vmax, interpolation='nearest')
     ax.set_aspect(1)
-    fig.colorbar(cs)
-    fig.savefig(f'{prefix}.Mx_ens.pdf')
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs, cax=cax)
+    fig.suptitle(prefix)
+    fig.savefig(f'{prefix}.Mx.pdf', dpi=600)
 
-    MA, MB, MP = measure_M(ens, geom)
+    cmap = plt.get_cmap('viridis').copy()
+    cmap.set_bad(color='k')
+
+    fig, axes = plt.subplots(
+        2, 4, layout='compressed', figsize=(10,4),
+        gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
+    ax = axes[0,0]
+    cax = axes[0,1]
+    ax.set_title(r'$H_T(x)$')
+    cs = ax.imshow(HTx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_aspect(1)
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs, cax=cax)
+    ax = axes[0,2]
+    cax = axes[0,3]
+    ax.set_title(r'$H_P(x)$')
+    cs = ax.imshow(HPx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_aspect(1)
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs, cax=cax)
+    ax = axes[1,0]
+    cax = axes[1,1]
+    ax.set_title(r'$H_E(x)$')
+    cs = ax.imshow(HEx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_aspect(1)
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs, cax=cax)
+    ax = axes[1,2]
+    cax = axes[1,3]
+    ax.set_title(r'$H(x)$')
+    cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_aspect(1)
+    bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    values = geom[bounds]
+    ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    fig.colorbar(cs, cax=cax)
+    fig.suptitle(prefix)
+    fig.savefig(f'{prefix}.Hx.pdf', dpi=600)
+
+    # fig, ax = plt.subplots(1,1)
+    # ens_f = ens.astype(np.float64)
+    # ens_f[:,:,geom != 0xff] = float('nan')
+    # cs = ax.imshow(ens_f.mean(axis=(0, 1)) - 0.5, vmin=-0.5, vmax=0.5, cmap=cmap, interpolation='nearest')
+    # ax.set_aspect(1)
+    # fig.colorbar(cs)
+    # fig.savefig(f'{prefix}.Mx_ens.pdf', dpi=600)
+
+    # TODO: extract MT, MP from Mx data instead of ens
+    # MA, MB, MP = measure_M(ens, geom)
     # MA, MB, MP = split_M(m, geom)
-    MT = (MA + MB)/2
+    # MT = (MA + MB)/2
+
+    MT = np.fromfile(f'{prefix}.MT.dat', dtype=np.int64)
+    MP = np.fromfile(f'{prefix}.MP.dat', dtype=np.int64)
+    MT = MT / float(N_FREE_TRI * NT) - 0.5
+    MP = MP / float(N_FREE_PET * NT) - 0.5
 
     fig, ax = plt.subplots(1,1)
     bins = np.linspace(-0.5, 0.5, num=51, endpoint=True)
@@ -88,16 +172,16 @@ def main():
     ax.set_aspect(1)
     fig.savefig(f'{prefix}.M_hist.pdf')
 
-    fig, axes = plt.subplots(4,1, sharex=True)
-    axes[0].plot(MA, label='$M_A$')
-    axes[0].legend()
-    axes[1].plot(MB, label='$M_B$')
-    axes[1].legend()
-    axes[2].plot(MT, label='$M_T$')
-    axes[2].legend()
-    axes[3].plot(MP, label='$M_P$')
-    axes[3].legend()
-    fig.savefig(f'{prefix}.M_trace.pdf')
+    # fig, axes = plt.subplots(4,1, sharex=True)
+    # axes[0].plot(MA, label='$M_A$')
+    # axes[0].legend()
+    # axes[1].plot(MB, label='$M_B$')
+    # axes[1].legend()
+    # axes[2].plot(MT, label='$M_T$')
+    # axes[2].legend()
+    # axes[3].plot(MP, label='$M_P$')
+    # axes[3].legend()
+    # fig.savefig(f'{prefix}.M_trace.pdf')
 
     fig, axes = plt.subplots(3, 2, figsize=(6,6), sharey='row')
     for (axl, axr), Hi, label in zip(axes, [HT, HP, HE], ['$H_T$', '$H_P$', '$H_E$']):
