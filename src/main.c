@@ -105,6 +105,9 @@ static spin_t lattice[NT * EROWS * ECOLS];
 #define DUMMY 0xaa
 static spin_t geom[EROWS * ECOLS];
 
+// Gauss Law defects, just for tracking and validation
+static int defects[NROWS * NCOLS];
+
 static uint64_t mag_accum[EROWS * ECOLS];
 static uint64_t mag_n = 0;
 static uint64_t HT_plus_accum[EROWS * ECOLS];
@@ -132,9 +135,9 @@ static inline int ind_pet_odd(int t, int i, int j) {
 static inline int wrap_i(int i) {
   return (NROWS+i) % NROWS;
 }
-// static inline int wrap_sj(int j) {
-//   return (NCOLS+j) % NCOLS;
-// }
+static inline int wrap_sj(int j) {
+  return (NCOLS+j) % NCOLS;
+}
 static inline int wrap_dj(int j) {
   return (2*NCOLS+j) % (2*NCOLS);
 }
@@ -143,8 +146,63 @@ static inline int wrap_t(int t) {
 }
 
 
+// DEBUG: measure gauss law violations across the lattice
+static void measure_Gx(bool verify) {
+  bool fail = false;
+  for (int t = 0; t < NT; ++t) {
+    for (int i = 0; i < NROWS; ++i) {
+      for (int j = 0; j < NCOLS; ++j) {
+        int djA = 2*j, djB = wrap_dj(djA+1), djC = wrap_dj(djA+2);
+        int sjA = j, sjB = wrap_sj(j+1);
+        int i_fwd = wrap_i(i+1);
+        if (i % 2 == 1) {
+          djA = wrap_dj(djA+1);
+          djB = wrap_dj(djB+1);
+          djC = wrap_dj(djC+1);
+        }
+        // triangles are {0,2}, petals are {1,3}
+        int s[12] = {
+          2*lattice[ind_tri(t, i, djA)],
+          -1+2*lattice[ind_pet_even(t, i, djA)],
+          2*lattice[ind_tri(t, i, djB)],
+          -1+2*lattice[ind_pet_even(t, i, djB)],
+          2*lattice[ind_tri(t, i, djC)],
+          -1+2*lattice[ind_pet_odd(t, i, sjB)],
+          2*lattice[ind_tri(t, i_fwd, djC)],
+          -1+2*lattice[ind_pet_even(t, i_fwd, djB)],
+          2*lattice[ind_tri(t, i_fwd, djB)],
+          -1+2*lattice[ind_pet_even(t, i_fwd, djA)],
+          2*lattice[ind_tri(t, i_fwd, djA)],
+          -1+2*lattice[ind_pet_odd(t, i, sjA)]
+        };
+        // printf("%d %d %d %d %d %d %d %d %d %d %d %d\n",
+        //        s[0], s[1], s[2], s[3],
+        //        s[4], s[5], s[6], s[7],
+        //        s[8], s[9], s[10], s[11]);
+        int G = 0;
+        for (int k = 0; k < 12; ++k) {
+          // wrap difference into {-1, 1}
+          G += (s[k] - s[(k+1)%12] + 2 + 5*4) % 4 - 2;
+        }
+        if (t == 0) {
+          if (!verify) {
+            printf("G[%d,%d] = %d\n", i, j, G);
+            defects[i*NCOLS + j] = G;
+          }
+        }
+        if (defects[i*NCOLS + j] != G) {
+          fail = true;
+        }
+      }
+    }
+  }
+  assert(!fail);
+}
+
+
+
 typedef enum {OBC, PBC, RHOMB, RHOMB_STRING} bc_t;
-typedef enum {COLD, HOT} init_t;
+typedef enum {COLD, HOT, COLD_STRING} init_t;
 
 static void init_geom_obc() {
   // fix left and bottom zones
@@ -230,6 +288,17 @@ static int init_geom(bc_t bc_kind) {
   return E_OK;
 }
 
+static void print_geom() {
+  for (int i = 0; i < EROWS; ++i) {
+    for (int j = 0; j < ECOLS; ++j) {
+      spin_t g = geom[i*ECOLS + j];
+      char c = (g == DUMMY) ? ' ' : '.';
+      printf("%c", c);
+    }
+    printf("\n");
+  }
+}
+
 static inline bool rand_bool() {
   assert(RAND_MAX % 2 == 1);
   return rand() % 2;
@@ -264,6 +333,33 @@ void init_lat_cold() {
   }
 }
 
+// add a string to a cold-init lattice by placing a defect-antidefect pair
+// at positions
+//  - (NROWS/2, (NCOLS+string_sep)/2)
+//  - (NROWS/2, (NCOLS-string_sep)/2)
+void init_lat_add_string(int string_sep) {
+  printf("== BEFORE STRING ==\n");
+  measure_Gx(false);
+  int i = NROWS/2;
+  if (i % 2 == 1) {
+    i += 1;
+  }
+  // dual lattice column indices are 2x primal
+  int jm = NCOLS - string_sep;
+  int jp = NCOLS + string_sep;
+  for (int t = 0; t < NT; ++t) {
+    for (int j = jm; j < jp-1; ++j) {
+      lattice[ind_tri(t, i, j)] = true;
+      if (j % 2 == 0) {
+        lattice[ind_pet_odd(t, i, j/2)] = true;
+      }
+    }
+  }
+  printf("== AFTER STRING ==\n");
+  measure_Gx(false);
+}
+
+// TODO: needs to be updated to satisfy Gauss' Law
 void init_lat_hot_tri() {
   init_lat_cold();
   for (int t = 0; t < NT; ++t) {
@@ -275,7 +371,7 @@ void init_lat_hot_tri() {
   }
 }
 
-int init_lat(init_t init_kind) {
+int init_lat(init_t init_kind, int string_sep) {
   memset(lattice, 0xff, sizeof(lattice));
   memset(mag_accum, 0.0, sizeof(mag_accum));
   memset(HT_plus_accum, 0.0, sizeof(HT_plus_accum));
@@ -288,7 +384,14 @@ int init_lat(init_t init_kind) {
     init_lat_cold();
   }
   else if (init_kind == HOT) {
+    // TODO
+    printf("HOT init not supported yet\n");
+    abort();
     init_lat_hot_tri();
+  }
+  else if (init_kind == COLD_STRING) {
+    init_lat_cold();
+    init_lat_add_string(string_sep);
   }
   else {
     return E_VALUE;
@@ -329,7 +432,6 @@ void init_lat_apply_geom() {
   }
 }
 
-
 // bit mask 00 | tfwd | tbwd | left | right | up | down
 //  - up/down bonds are irrelevant for petals
 //  - left/right bonds are three-way for petals
@@ -361,17 +463,26 @@ static inline bool bond_tfwd(bond_dirs_t x) {
   return (x >> T_FWD) & 1;
 }
 
+// which directions each point is bonded in for cluster formation
 static struct {
   bond_dirs_t tri[NT][NROWS][2*NCOLS];
   bond_dirs_t pet_even[NT][NROWS][2*NCOLS];
   bond_dirs_t pet_odd[NT][NROWS][NCOLS];
 } bonds;
 
+// how many times we visited each node already when flipping or unflipping
 static struct {
-  bool tri[NT][NROWS][2*NCOLS];
-  bool pet_even[NT][NROWS][2*NCOLS];
-  bool pet_odd[NT][NROWS][NCOLS];
+  int tri[NT][NROWS][2*NCOLS];
+  int pet_even[NT][NROWS][2*NCOLS];
+  int pet_odd[NT][NROWS][NCOLS];
 } seen;
+
+// which temporal sheet we are on (to avoid wrapping for Gauss' Law)
+static struct {
+  int tri[NT][NROWS][2*NCOLS];
+  int pet_even[NT][NROWS][2*NCOLS];
+  int pet_odd[NT][NROWS][NCOLS];
+} sheet;
 
 
 // statically alloc'd global queue
@@ -406,6 +517,7 @@ static inline void q_push(coord_t idx) {
 
 bool tri_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_a) {
+    assert(delta_b);
     return false;
   }
   if (!delta_b) {
@@ -416,6 +528,7 @@ bool tri_bond_spatial(bool delta_a, bool delta_b) {
 
 bool tri_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_a) {
+    assert(delta_b);
     return false;
   }
   if (!delta_b) {
@@ -426,6 +539,7 @@ bool tri_bond_temporal(bool delta_a, bool delta_b) {
 
 bool pet_bond_spatial(bool delta_a, bool delta_b) {
   if (!delta_b) {
+    assert(delta_a);
     return false;
   }
   if (!delta_a) {
@@ -436,6 +550,7 @@ bool pet_bond_spatial(bool delta_a, bool delta_b) {
 
 bool pet_bond_temporal(bool delta_a, bool delta_b) {
   if (!delta_b) {
+    assert(delta_a);
     return false;
   }
   if (!delta_a) {
@@ -524,47 +639,69 @@ void sample_tri_bonds() {
 }
 
 // flood fill expanding from sites already pushed on the queue
-void flood_fill_tri(spin_t spin) {
+void flood_fill_tri(spin_t spin, int gen, bool *temporal_wrap, int *count) {
+  *temporal_wrap = false;
+  *count = 0;
   while (!q_empty()) {
+    *count += 1;
     coord_t x = q_pop();
     int t = x.t, i = x.i, j = x.j;
-    assert(seen.tri[t][i][j]);
+    assert(seen.tri[t][i][j] == gen);
+    int prev_sheet = sheet.tri[t][i][j];
     lattice[ind_tri(t, i, j)] = spin;
     bond_dirs_t bond_dirs = bonds.tri[t][i][j];
     // TFWD
     if (bond_tfwd(bond_dirs)) {
       int tfwd = wrap_t(t+1);
+      int next_sheet = (t+1 >= NT) ? prev_sheet+1 : prev_sheet;
       assert(bond_tbwd(bonds.tri[tfwd][i][j]));
-      if (!seen.tri[tfwd][i][j]) {
-        seen.tri[tfwd][i][j] = true;
+      if (seen.tri[tfwd][i][j] < gen) {
+        seen.tri[tfwd][i][j] = gen;
+        sheet.tri[tfwd][i][j] = next_sheet;
         q_push((coord_t){tfwd, i, j, 0});
+      }
+      else if (sheet.tri[tfwd][i][j] != next_sheet) {
+        *temporal_wrap = true;
       }
     }
     // TBWD
     if (bond_tbwd(bond_dirs)) {
       int tbwd = wrap_t(t-1);
+      int next_sheet = (t-1 < 0) ? prev_sheet-1 : prev_sheet;
       assert(bond_tfwd(bonds.tri[tbwd][i][j]));
-      if (!seen.tri[tbwd][i][j]) {
-        seen.tri[tbwd][i][j] = true;
+      if (seen.tri[tbwd][i][j] < gen) {
+        seen.tri[tbwd][i][j] = gen;
+        sheet.tri[tbwd][i][j] = next_sheet;
         q_push((coord_t){tbwd, i, j, 0});
+      }
+      else if (sheet.tri[tbwd][i][j] != next_sheet) {
+        *temporal_wrap = true;
       }
     }
     // LEFT
     if (bond_l(bond_dirs)) {
       int j_l = wrap_dj(j-1);
       assert(bond_r(bonds.tri[t][i][j_l]));
-      if (!seen.tri[t][i][j_l]) {
-        seen.tri[t][i][j_l] = true;
+      if (seen.tri[t][i][j_l] < gen) {
+        seen.tri[t][i][j_l] = gen;
+        sheet.tri[t][i][j_l] = prev_sheet;
         q_push((coord_t){t, i, j_l, 0});
+      }
+      else if (sheet.tri[t][i][j_l] != prev_sheet) {
+        *temporal_wrap = true;
       }
     }
     // RIGHT
     if (bond_r(bond_dirs)) {
       int j_r = wrap_dj(j+1);
       assert(bond_l(bonds.tri[t][i][j_r]));
-      if (!seen.tri[t][i][j_r]) {
-        seen.tri[t][i][j_r] = true;
+      if (seen.tri[t][i][j_r] < gen) {
+        seen.tri[t][i][j_r] = gen;
+        sheet.tri[t][i][j_r] = prev_sheet;
         q_push((coord_t){t, i, j_r, 0});
+      }
+      else if (sheet.tri[t][i][j_r] != prev_sheet) {
+        *temporal_wrap = true;
       }
     }
     // UP/DOWN
@@ -579,9 +716,13 @@ void flood_fill_tri(spin_t spin) {
         assert(bond_u(bond_dirs));
         assert(bond_d(bonds.tri[t][i_ud][j]));
       }
-      if (!seen.tri[t][i_ud][j]) {
-        seen.tri[t][i_ud][j] = true;
+      if (seen.tri[t][i_ud][j] < gen) {
+        seen.tri[t][i_ud][j] = gen;
+        sheet.tri[t][i_ud][j] = prev_sheet;
         q_push((coord_t){t, i_ud, j, 0});
+      }
+      else if (sheet.tri[t][i_ud][j] != prev_sheet) {
+        *temporal_wrap = true;
       }
     }
   }
@@ -589,7 +730,11 @@ void flood_fill_tri(spin_t spin) {
 
 void update_tri_spins() {
   memset(seen.tri, 0, sizeof(seen.tri));
+  memset(sheet.tri, 0, sizeof(sheet.tri));
+  bool temporal_wrap;
+  int count;
   // outer loop, fixed
+  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -599,10 +744,11 @@ void update_tri_spins() {
         if (geom[ind_tri(0, i, j)] == FREE) {
           continue;
         }
-        seen.tri[t][i][j] = true;
+        int gen = 1;
+        seen.tri[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, 0});
-        flood_fill_tri(geom[ind_tri(0, i, j)]);
+        flood_fill_tri(geom[ind_tri(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
       }
     }
@@ -614,11 +760,24 @@ void update_tri_spins() {
         if (seen.tri[t][i][j]) {
           continue;
         }
-        seen.tri[t][i][j] = true;
+        int gen = 1;
+        seen.tri[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, 0});
-        flood_fill_tri(rand_bool());
+        spin_t prev_val = lattice[ind_tri(t, i, j)];
+        flood_fill_tri(rand_bool(), gen, &temporal_wrap, &count);
+        // printf("New cluster (%d)\n", count);
         assert(q_empty());
+        if (temporal_wrap) { // unflip if wrapped
+          // printf("temporal wrap, unflipping!\n");
+          int prev_count = count;
+          gen += 1;
+          seen.tri[t][i][j] = gen;
+          q_push((coord_t){t, i, j, 0});
+          flood_fill_tri(prev_val, gen, &temporal_wrap, &count);
+          assert(q_empty());
+          assert(count == prev_count);
+        }
       }
     }
   }
@@ -718,31 +877,49 @@ void sample_pet_bonds() {
 }
 
 // flood fill expanding from sites already pushed on the queue
-void flood_fill_pet(spin_t spin) {
+void flood_fill_pet(spin_t spin, int gen, bool *temporal_wrap, int *count) {
+  *temporal_wrap = false;
+  *count = 0;
   while (!q_empty()) {
+    *count += 1;
     coord_t x = q_pop();
     int t = x.t, i = x.i, j = x.j;
     // even petals
     if (x.p == EVEN) {
-      assert(seen.pet_even[t][i][j]);
+      assert(seen.pet_even[t][i][j] == gen);
+      int prev_sheet = sheet.pet_even[t][i][j];
       lattice[ind_pet_even(t, i, j)] = spin;
+      // printf("    (%d,%d,%d)\n",
+      //        ind_pet_even(t, i, j)/(EROWS*ECOLS),
+      //        (ind_pet_even(t, i, j)%(EROWS*ECOLS))/ECOLS,
+      //        ind_pet_even(t, i, j)%(ECOLS));
       bond_dirs_t bond_dirs = bonds.pet_even[t][i][j];
       // TFWD
       if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
+        int next_sheet = (t+1 >= NT) ? prev_sheet+1 : prev_sheet;
         assert(bond_tbwd(bonds.pet_even[tfwd][i][j]));
-        if (!seen.pet_even[tfwd][i][j]) {
-          seen.pet_even[tfwd][i][j] = true;
+        if (seen.pet_even[tfwd][i][j] < gen) {
+          seen.pet_even[tfwd][i][j] = gen;
+          sheet.pet_even[tfwd][i][j] = next_sheet;
           q_push((coord_t){tfwd, i, j, EVEN});
+        }
+        else if (sheet.pet_even[tfwd][i][j] != next_sheet) {
+          *temporal_wrap = true;
         }
       }
       // TBWD
       if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
+        int next_sheet = (t-1 < 0) ? prev_sheet-1 : prev_sheet;
         assert(bond_tfwd(bonds.pet_even[tbwd][i][j]));
-        if (!seen.pet_even[tbwd][i][j]) {
-          seen.pet_even[tbwd][i][j] = true;
+        if (seen.pet_even[tbwd][i][j] < gen) {
+          seen.pet_even[tbwd][i][j] = gen;
+          sheet.pet_even[tbwd][i][j] = next_sheet;
           q_push((coord_t){tbwd, i, j, EVEN});
+        }
+        else if (sheet.pet_even[tbwd][i][j] != next_sheet) {
+          *temporal_wrap = true;
         }
       }
       // LEFT (3-way)
@@ -757,13 +934,21 @@ void flood_fill_pet(spin_t spin) {
         else {
           assert(bond_d(bonds.pet_odd[t][i_l][j_lo]));
         }
-        if (!seen.pet_even[t][i][j_le]) {
-          seen.pet_even[t][i][j_le] = true;
+        if (seen.pet_even[t][i][j_le] < gen) {
+          seen.pet_even[t][i][j_le] = gen;
+          sheet.pet_even[t][i][j_le] = prev_sheet;
           q_push((coord_t){t, i, j_le, EVEN});
         }
-        if (!seen.pet_odd[t][i_l][j_lo]) {
-          seen.pet_odd[t][i_l][j_lo] = true;
+        else if (sheet.pet_even[t][i][j_le] != prev_sheet) {
+          *temporal_wrap = true;
+        }
+        if (seen.pet_odd[t][i_l][j_lo] < gen) {
+          seen.pet_odd[t][i_l][j_lo] = gen;
+          sheet.pet_odd[t][i_l][j_lo] = prev_sheet;
           q_push((coord_t){t, i_l, j_lo, ODD});
+        }
+        else if (sheet.pet_odd[t][i_l][j_lo] != prev_sheet) {
+          *temporal_wrap = true;
         }
       }
       // RIGHT (3-way)
@@ -778,13 +963,21 @@ void flood_fill_pet(spin_t spin) {
         else {
           assert(bond_d(bonds.pet_odd[t][i_r][j_ro]));
         }
-        if (!seen.pet_even[t][i][j_re]) {
-          seen.pet_even[t][i][j_re] = true;
+        if (seen.pet_even[t][i][j_re] < gen) {
+          seen.pet_even[t][i][j_re] = gen;
+          sheet.pet_even[t][i][j_re] = prev_sheet;
           q_push((coord_t){t, i, j_re, EVEN});
         }
-        if (!seen.pet_odd[t][i_r][j_ro]) {
-          seen.pet_odd[t][i_r][j_ro] = true;
+        else if (sheet.pet_even[t][i][j_re] != prev_sheet) {
+          *temporal_wrap = true;
+        }
+        if (seen.pet_odd[t][i_r][j_ro] < gen) {
+          seen.pet_odd[t][i_r][j_ro] = gen;
+          sheet.pet_odd[t][i_r][j_ro] = prev_sheet;
           q_push((coord_t){t, i_r, j_ro, ODD});
+        }
+        else if (sheet.pet_odd[t][i_r][j_ro] != prev_sheet) {
+          *temporal_wrap = true;
         }
       }
       assert(!bond_u(bond_dirs));
@@ -792,25 +985,51 @@ void flood_fill_pet(spin_t spin) {
     }
     // odd petals
     else {
-      assert(seen.pet_odd[t][i][j]);
+      assert(seen.pet_odd[t][i][j] == gen);
+      int prev_sheet = sheet.pet_odd[t][i][j];
       lattice[ind_pet_odd(t, i, j)] = spin;
+      // printf("    (%d,%d,%d) sheet %d\n",
+      //        ind_pet_odd(t, i, j)/(EROWS*ECOLS),
+      //        (ind_pet_odd(t, i, j)%(EROWS*ECOLS))/ECOLS,
+      //        ind_pet_odd(t, i, j)%(ECOLS),
+      //        prev_sheet);
       bond_dirs_t bond_dirs = bonds.pet_odd[t][i][j];
       // TFWD
       if (bond_tfwd(bond_dirs)) {
         int tfwd = wrap_t(t+1);
+        int next_sheet = (t+1 >= NT) ? prev_sheet+1 : prev_sheet;
         assert(bond_tbwd(bonds.pet_odd[tfwd][i][j]));
-        if (!seen.pet_odd[tfwd][i][j]) {
-          seen.pet_odd[tfwd][i][j] = true;
+        if (seen.pet_odd[tfwd][i][j] < gen) {
+          // printf("Not seen tfwd=%d\n", tfwd);
+          seen.pet_odd[tfwd][i][j] = gen;
+          sheet.pet_odd[tfwd][i][j] = next_sheet;
           q_push((coord_t){tfwd, i, j, ODD});
+        }
+        else if (sheet.pet_odd[tfwd][i][j] != next_sheet) {
+          // printf("Seen, wrap tfwd=%d\n", tfwd);
+          *temporal_wrap = true;
+        }
+        else {
+          // printf("Seen, no wrap tfwd=%d\n", tfwd);
         }
       }
       // TBWD
       if (bond_tbwd(bond_dirs)) {
         int tbwd = wrap_t(t-1);
+        int next_sheet = (t-1 < 0) ? prev_sheet-1 : prev_sheet;
         assert(bond_tfwd(bonds.pet_odd[tbwd][i][j]));
-        if (!seen.pet_odd[tbwd][i][j]) {
-          seen.pet_odd[tbwd][i][j] = true;
+        if (seen.pet_odd[tbwd][i][j] < gen) {
+          // printf("Not seen tbwd=%d\n", tbwd);
+          seen.pet_odd[tbwd][i][j] = gen;
+          sheet.pet_odd[tbwd][i][j] = next_sheet;
           q_push((coord_t){tbwd, i, j, ODD});
+        }
+        else if (sheet.pet_odd[tbwd][i][j] != next_sheet) {
+          // printf("Seen, wrap tbwd=%d\n", tbwd);
+          *temporal_wrap = true;
+        }
+        else {
+          // printf("Seen, no wrap tbwd=%d\n", tbwd);
         }
       }
       // UP (3-way)
@@ -820,13 +1039,21 @@ void flood_fill_pet(spin_t spin) {
         int j_l = wrap_dj(j_r-1);
         assert(bond_r(bonds.pet_even[t][i][j_l]));
         assert(bond_l(bonds.pet_even[t][i][j_r]));
-        if (!seen.pet_even[t][i][j_l]) {
-          seen.pet_even[t][i][j_l] = true;
+        if (seen.pet_even[t][i][j_l] < gen) {
+          seen.pet_even[t][i][j_l] = gen;
+          sheet.pet_even[t][i][j_l] = prev_sheet;
           q_push((coord_t){t, i, j_l, EVEN});
         }
-        if (!seen.pet_even[t][i][j_r]) {
-          seen.pet_even[t][i][j_r] = true;
+        else if (sheet.pet_even[t][i][j_l] != prev_sheet) {
+          *temporal_wrap = true;
+        }
+        if (seen.pet_even[t][i][j_r] < gen) {
+          seen.pet_even[t][i][j_r] = gen;
+          sheet.pet_even[t][i][j_r] = prev_sheet;
           q_push((coord_t){t, i, j_r, EVEN});
+        }
+        else if (sheet.pet_even[t][i][j_r] != prev_sheet) {
+          *temporal_wrap = true;
         }
       }
       // DOWN (3-way)
@@ -837,13 +1064,21 @@ void flood_fill_pet(spin_t spin) {
         int i_d = wrap_i(i+1);
         assert(bond_r(bonds.pet_even[t][i_d][j_l]));
         assert(bond_l(bonds.pet_even[t][i_d][j_r]));
-        if (!seen.pet_even[t][i_d][j_l]) {
-          seen.pet_even[t][i_d][j_l] = true;
+        if (seen.pet_even[t][i_d][j_l] < gen) {
+          seen.pet_even[t][i_d][j_l] = gen;
+          sheet.pet_even[t][i_d][j_l] = prev_sheet;
           q_push((coord_t){t, i_d, j_l, EVEN});
         }
-        if (!seen.pet_even[t][i_d][j_r]) {
-          seen.pet_even[t][i_d][j_r] = true;
+        else if (sheet.pet_even[t][i_d][j_l] != prev_sheet) {
+          *temporal_wrap = true;
+        }
+        if (seen.pet_even[t][i_d][j_r] < gen) {
+          seen.pet_even[t][i_d][j_r] = gen;
+          sheet.pet_even[t][i_d][j_r] = prev_sheet;
           q_push((coord_t){t, i_d, j_r, EVEN});
+        }
+        else if (sheet.pet_even[t][i_d][j_r] != prev_sheet) {
+          *temporal_wrap = true;
         }
       }
       assert(!bond_l(bond_dirs));
@@ -855,7 +1090,12 @@ void flood_fill_pet(spin_t spin) {
 void update_pet_spins() {
   memset(seen.pet_even, 0, sizeof(seen.pet_even));
   memset(seen.pet_odd, 0, sizeof(seen.pet_odd));
+  memset(sheet.pet_even, 0, sizeof(sheet.pet_even));
+  memset(sheet.pet_odd, 0, sizeof(sheet.pet_odd));
+  bool temporal_wrap;
+  int count;
   // outer loop even, fixed
+  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -865,15 +1105,17 @@ void update_pet_spins() {
         if (geom[ind_pet_even(0, i, j)] == FREE) {
           continue;
         }
-        seen.pet_even[t][i][j] = true;
+        int gen = 1;
+        seen.pet_even[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(geom[ind_pet_even(0, i, j)]);
+        flood_fill_pet(geom[ind_pet_even(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
       }
     }
   }
   // outer loop odd, fixed
+  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
@@ -883,10 +1125,11 @@ void update_pet_spins() {
         if (geom[ind_pet_odd(0, i, j)] == FREE) {
           continue;
         }
-        seen.pet_odd[t][i][j] = true;
+        int gen = 1;
+        seen.pet_odd[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        flood_fill_pet(geom[ind_pet_odd(0, i, j)]);
+        flood_fill_pet(geom[ind_pet_odd(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
       }
     }
@@ -898,11 +1141,26 @@ void update_pet_spins() {
         if (seen.pet_even[t][i][j]) {
           continue;
         }
-        seen.pet_even[t][i][j] = true;
+        int gen = 1;
+        seen.pet_even[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(rand_bool());
+        spin_t prev_val = lattice[ind_pet_even(t, i, j)];
+        flood_fill_pet(rand_bool(), gen, &temporal_wrap, &count);
+        // printf("New even cluster (%d)\n", count);
         assert(q_empty());
+        if (temporal_wrap) { // unflip if wrapped
+          // printf("temporal wrap, unflipping!\n");
+          int prev_count = count;
+          gen += 1;
+          seen.pet_even[t][i][j] = gen;
+          q_push((coord_t){t, i, j, EVEN});
+          flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
+          assert(q_empty());
+          assert(count == prev_count);
+        }
+        // FORNOW:
+        measure_Gx(true);
       }
     }
   }
@@ -913,11 +1171,26 @@ void update_pet_spins() {
         if (seen.pet_odd[t][i][j]) {
           continue;
         }
-        seen.pet_odd[t][i][j] = true;
+        int gen = 1;
+        seen.pet_odd[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        flood_fill_pet(rand_bool());
+        spin_t prev_val = lattice[ind_pet_odd(t, i, j)];
+        flood_fill_pet(rand_bool(), gen, &temporal_wrap, &count);
+        // printf("New odd cluster (%d)\n", count);
         assert(q_empty());
+        if (temporal_wrap) { // unflip if wrapped
+          // printf("temporal wrap, unflipping!\n");
+          int prev_count = count;
+          gen += 1;
+          seen.pet_odd[t][i][j] = gen;
+          q_push((coord_t){t, i, j, ODD});
+          flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
+          assert(q_empty());
+          assert(count == prev_count);
+        }
+        // FORNOW:
+        measure_Gx(true);
       }
     }
   }
@@ -1089,6 +1362,7 @@ typedef struct {
   int n_iter;
   int save_freq;
   int meas_freq;
+  int string_sep;
   unsigned seed;
   const char* prefix;
   // derived
@@ -1107,7 +1381,8 @@ typedef struct {
 void usage(const char* prog) {
   printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
          "-i <n_iter> -s <save_freq> -m <meas_freq> "
-         "[-b (obc|pbc|rhomb|rhomb_str)] [-c (cold|hot)] [-r <seed>]\n", prog);
+         "[-b (obc|pbc|rhomb|rhomb_str)] [-c (cold|hot|cold_str)] "
+         "[-x string_sep] [-r <seed>]\n", prog);
 }
 
 int parse_args(int argc, char** argv, config_t* cfg) {
@@ -1118,13 +1393,13 @@ int parse_args(int argc, char** argv, config_t* cfg) {
 
   bool set_dt = false, set_KP = false, set_KE = false,
       set_prefix = false, set_n_iter = false, set_save_freq = false,
-      set_meas_freq = false;
+      set_meas_freq = false, set_string_sep = false;
   double dt, KP, KE;
   bc_t bc_kind = PBC;
   init_t init_kind = HOT;
   const char* prefix;
   char c;
-  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:")) != -1) {
+  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:")) != -1) {
     if (c == 't') {
       dt = atof(optarg);
       set_dt = true;
@@ -1175,9 +1450,16 @@ int parse_args(int argc, char** argv, config_t* cfg) {
         return E_ARGS;
       }
     }
+    else if (c == 'x') {
+      cfg->string_sep = atoi(optarg);
+      set_string_sep = true;
+    }
     else if (c == 'c') {
       if (strcmp(optarg, "cold") == 0) {
         init_kind = COLD;
+      }
+      else if (strcmp(optarg, "cold_str") == 0) {
+        init_kind = COLD_STRING;
       }
       else if (strcmp(optarg, "hot") == 0) {
         init_kind = HOT;
@@ -1213,6 +1495,10 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   }
   if (dt <= 0.0) {
     printf("Invalid dt = %f\n", dt);
+    return E_ARGS;
+  }
+  if (init_kind == COLD_STRING && !set_string_sep) {
+    printf("Must provide string_sep for cold string init\n");
     return E_ARGS;
   }
 
@@ -1260,9 +1546,11 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   init_couplings(dt, KP, KE);
   ret = init_geom(bc_kind);
   assert(ret == E_OK);
-  ret = init_lat(init_kind);
+  print_geom();
+  ret = init_lat(init_kind, cfg->string_sep);
   assert(ret == E_OK);
   init_lat_apply_geom();
+  measure_Gx(false);
 
   return ret;
 }
@@ -1333,12 +1621,21 @@ int main(int argc, char** argv) {
           "Iter %d / %d (%.2f / %.2fs | %.2f it/s)\n",
           i+1, cfg.n_iter, elapsed, expected, rate);
     }
+    // FORNOW:
+    // printf("Iter %d (pre), measure Gx:\n", i+1);
+    // measure_Gx(true);
     // triangle sublattice
     sample_tri_bonds();
     update_tri_spins();
+    // FORNOW:
+    // printf("Iter %d (tri), measure Gx:\n", i+1);
+    // measure_Gx(true);
     // petal sublattice
     sample_pet_bonds();
     update_pet_spins();
+    // FORNOW:
+    // printf("Iter %d (pet), measure Gx:\n", i+1);
+    // measure_Gx(true);
 
     // accumulate Mx
     for (int t = 0; t < NT; ++t) {
@@ -1390,11 +1687,15 @@ int main(int argc, char** argv) {
     }
   }
 
-  fwrite(HT, sizeof(int), len_Hi, f_HT);
-  fwrite(HP, sizeof(int), len_Hi, f_HP);
-  fwrite(HE, sizeof(int), len_Hi, f_HE);
-  fwrite(MT, sizeof(int), len_Mi, f_MT);
-  fwrite(MP, sizeof(int), len_Mi, f_MP);
+  // FORNOW:
+  printf("Final Gx state:\n");
+  measure_Gx(true);
+
+  fwrite(HT, sizeof(uint64_t), len_Hi, f_HT);
+  fwrite(HP, sizeof(uint64_t), len_Hi, f_HP);
+  fwrite(HE, sizeof(uint64_t), len_Hi, f_HE);
+  fwrite(MT, sizeof(uint64_t), len_Mi, f_MT);
+  fwrite(MP, sizeof(uint64_t), len_Mi, f_MP);
 
   double mag[EROWS * ECOLS];
   for (int i = 0; i < EROWS * ECOLS; ++i) {
