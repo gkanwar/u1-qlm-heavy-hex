@@ -186,8 +186,8 @@ def main():
     fig, axes = plt.subplots(3, 2, figsize=(6,6), sharey='row')
     for (axl, axr), Hi, label in zip(axes, [HT, HP, HE], ['$H_T$', '$H_P$', '$H_E$']):
         xs = np.arange(len(Hi))
-        axl.plot(xs[::100], Hi[::100], color='0.8')
-        axl.plot(*al.bin_data(Hi, binsize=100), label=label)
+        axl.plot(xs[::10], Hi[::10], color='0.8')
+        axl.plot(*al.bin_data(Hi, binsize=10), label=label)
         axl.legend()
         axr.hist(Hi, bins=30, orientation='horizontal')
     fig.savefig(f'{prefix}.H_trace.pdf')
