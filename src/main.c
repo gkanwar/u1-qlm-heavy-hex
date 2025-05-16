@@ -110,6 +110,8 @@ static int defects[NROWS * NCOLS];
 
 static uint64_t mag_accum[EROWS * ECOLS];
 static uint64_t mag_n = 0;
+static int64_t Ex_accum[EROWS * ECOLS];
+static uint64_t Ex_n = 0;
 static uint64_t HT_plus_accum[EROWS * ECOLS];
 static uint64_t HT_minus_accum[EROWS * ECOLS];
 static uint64_t HP_plus_accum[EROWS * ECOLS];
@@ -145,6 +147,9 @@ static inline int wrap_t(int t) {
   return (NT+t) % NT;
 }
 
+static inline int wrap_mod4(int x) {
+  return ((x%4)+6)%4 - 2;
+}
 
 // DEBUG: measure gauss law violations across the lattice
 static void measure_Gx(bool verify) {
@@ -182,7 +187,7 @@ static void measure_Gx(bool verify) {
         int G = 0;
         for (int k = 0; k < 12; ++k) {
           // wrap difference into {-1, 1}
-          G += (s[k] - s[(k+1)%12] + 2 + 5*4) % 4 - 2;
+          G += wrap_mod4(s[k] - s[(k+1)%12]);
         }
         if (t == 0) {
           if (!verify) {
@@ -374,6 +379,7 @@ void init_lat_hot_tri() {
 int init_lat(init_t init_kind, int string_sep) {
   memset(lattice, 0xff, sizeof(lattice));
   memset(mag_accum, 0.0, sizeof(mag_accum));
+  memset(Ex_accum, 0.0, sizeof(Ex_accum));
   memset(HT_plus_accum, 0.0, sizeof(HT_plus_accum));
   memset(HT_minus_accum, 0.0, sizeof(HT_minus_accum));
   memset(HP_plus_accum, 0.0, sizeof(HP_plus_accum));
@@ -728,11 +734,12 @@ void flood_fill_tri(spin_t spin, int gen, bool *temporal_wrap, int *count) {
   }
 }
 
-void update_tri_spins() {
+double update_tri_spins() {
   memset(seen.tri, 0, sizeof(seen.tri));
   memset(sheet.tri, 0, sizeof(sheet.tri));
   bool temporal_wrap;
   int count;
+  int acc = 0, rej = 0;
   // outer loop, fixed
   // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
@@ -750,6 +757,7 @@ void update_tri_spins() {
         q_push((coord_t){t, i, j, 0});
         flood_fill_tri(geom[ind_tri(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
+        rej += count;
       }
     }
   }
@@ -777,10 +785,15 @@ void update_tri_spins() {
           flood_fill_tri(prev_val, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
+          rej += count;
+        }
+        else {
+          acc += count;
         }
       }
     }
   }
+  return acc / (double)(acc + rej);
 }
 
 void sample_pet_bonds() {
@@ -1087,13 +1100,14 @@ void flood_fill_pet(spin_t spin, int gen, bool *temporal_wrap, int *count) {
   }
 }
 
-void update_pet_spins() {
+double update_pet_spins() {
   memset(seen.pet_even, 0, sizeof(seen.pet_even));
   memset(seen.pet_odd, 0, sizeof(seen.pet_odd));
   memset(sheet.pet_even, 0, sizeof(sheet.pet_even));
   memset(sheet.pet_odd, 0, sizeof(sheet.pet_odd));
   bool temporal_wrap;
   int count;
+  int acc = 0, rej = 0;
   // outer loop even, fixed
   // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
@@ -1111,6 +1125,7 @@ void update_pet_spins() {
         q_push((coord_t){t, i, j, EVEN});
         flood_fill_pet(geom[ind_pet_even(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
+        rej += count;
       }
     }
   }
@@ -1131,6 +1146,7 @@ void update_pet_spins() {
         q_push((coord_t){t, i, j, ODD});
         flood_fill_pet(geom[ind_pet_odd(0, i, j)], gen, &temporal_wrap, &count);
         assert(q_empty());
+        rej += count;
       }
     }
   }
@@ -1158,9 +1174,13 @@ void update_pet_spins() {
           flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
+          rej += count;
+        }
+        else {
+          acc += count;
         }
         // FORNOW:
-        measure_Gx(true);
+        // measure_Gx(true);
       }
     }
   }
@@ -1188,12 +1208,17 @@ void update_pet_spins() {
           flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
+          rej += count;
+        }
+        else {
+          acc += count;
         }
         // FORNOW:
-        measure_Gx(true);
+        // measure_Gx(true);
       }
     }
   }
+  return acc / (double)(acc + rej);
 }
 
 void measure_HP_HE_pet_even(
@@ -1349,6 +1374,42 @@ void measure_MT_MP(uint64_t* MT, uint64_t* MP) {
   *MP = tot_MP;
 }
 
+void measure_Ex_pet_even(int t, int i, int j, int64_t* Ex) {
+  if (geom[ind_pet_even(0, i, j)] != FREE) {
+    return;
+  }
+  // relevant petals
+  bool pet = lattice[ind_pet_even(t, i, j)];
+  int j_l = j;
+  int j_r = wrap_dj(j+1);
+
+  // relevant triangles
+  bool tri_l = lattice[ind_tri(t, i, j_l)];
+  bool tri_r = lattice[ind_tri(t, i, j_r)];
+
+  int diff_l = wrap_mod4(2*tri_l - 1 - 2*pet);
+  int diff_r = wrap_mod4(2*pet - 2*tri_r + 1);
+  assert((diff_l + diff_r) % 2 == 0);
+  *Ex += (diff_l + diff_r)/2;
+}
+
+void measure_Ex_pet_odd(int t, int i, int j, int64_t* Ex) {
+  // relevant petals
+  bool pet = lattice[ind_pet_odd(t, i, j)];
+  int i_u = i;
+  int i_d = wrap_i(i+1);
+  int j_even = 2*j + (i % 2);
+
+  // relevant triangles
+  bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+  bool tri_d = lattice[ind_tri(t, i_d, j_even)];
+
+  int diff_u = wrap_mod4(2*tri_u - 1 - 2*pet);
+  int diff_d = wrap_mod4(2*pet - 2*tri_d + 1);
+  assert((diff_u + diff_d) % 2 == 0);
+  *Ex += (diff_u + diff_d)/2;
+}
+
 void write_lattice(FILE *f) {
   assert(f != NULL);
   fwrite(lattice, 1, sizeof(lattice), f);
@@ -1376,6 +1437,7 @@ typedef struct {
   char fname_MP[STRLEN+1];
   char fname_Mx[STRLEN+1];
   char fname_Hx[STRLEN+1];
+  char fname_Ex[STRLEN+1];
 } config_t;
 
 void usage(const char* prog) {
@@ -1518,6 +1580,7 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   strncpy(cfg->fname_MP, prefix, STRLEN);
   strncpy(cfg->fname_Mx, prefix, STRLEN);
   strncpy(cfg->fname_Hx, prefix, STRLEN);
+  strncpy(cfg->fname_Ex, prefix, STRLEN);
   strncpy(cfg->fname_ens + len, ".ens.dat", STRLEN-len);
   strncpy(cfg->fname_meta + len, ".meta.dat", STRLEN-len);
   strncpy(cfg->fname_HT + len, ".HT.dat", STRLEN-len);
@@ -1527,6 +1590,7 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   strncpy(cfg->fname_MP + len, ".MP.dat", STRLEN-len);
   strncpy(cfg->fname_Mx + len, ".Mx.dat", STRLEN-len);
   strncpy(cfg->fname_Hx + len, ".Hx.dat", STRLEN-len);
+  strncpy(cfg->fname_Ex + len, ".Ex.dat", STRLEN-len);
 
   // derived
   if (cfg->meas_freq > 1) {
@@ -1581,10 +1645,11 @@ int main(int argc, char** argv) {
   FILE *f_MP = fopen(cfg.fname_MP, "wb");
   FILE *f_Mx = fopen(cfg.fname_Mx, "wb");
   FILE *f_Hx = fopen(cfg.fname_Hx, "wb");
+  FILE *f_Ex = fopen(cfg.fname_Ex, "wb");
   if (f == NULL || f_meta == NULL ||
       f_HT == NULL || f_HP == NULL || f_HE == NULL ||
       f_MT == NULL || f_MP == NULL ||
-      f_Mx == NULL || f_Hx == NULL)  {
+      f_Mx == NULL || f_Hx == NULL || f_Ex == NULL)  {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
@@ -1610,9 +1675,10 @@ int main(int argc, char** argv) {
   uint64_t* MP = malloc(len_Mi * sizeof(uint64_t));
 
   clock_t start = clock();
+  double acc_tri = 0.0, acc_pet = 0.0;
   for (int i = 0; i < cfg.n_iter; ++i) {
     // progress
-    if ((i+1) % 1000 == 0) {
+    if ((i+1) % 100 == 0) {
       clock_t ticks = clock() - start;
       double elapsed = ticks / (double)CLOCKS_PER_SEC;
       double expected = (elapsed * cfg.n_iter) / (i+1);
@@ -1620,19 +1686,22 @@ int main(int argc, char** argv) {
       printf(
           "Iter %d / %d (%.2f / %.2fs | %.2f it/s)\n",
           i+1, cfg.n_iter, elapsed, expected, rate);
+      printf(
+          "... acc tri = %.2f, pet = %.2f\n",
+          100.0*acc_tri / (i+1), 100.0*acc_pet / (i+1));
     }
     // FORNOW:
     // printf("Iter %d (pre), measure Gx:\n", i+1);
     // measure_Gx(true);
     // triangle sublattice
     sample_tri_bonds();
-    update_tri_spins();
+    acc_tri += update_tri_spins();
     // FORNOW:
     // printf("Iter %d (tri), measure Gx:\n", i+1);
     // measure_Gx(true);
     // petal sublattice
     sample_pet_bonds();
-    update_pet_spins();
+    acc_pet += update_pet_spins();
     // FORNOW:
     // printf("Iter %d (pet), measure Gx:\n", i+1);
     // measure_Gx(true);
@@ -1644,7 +1713,7 @@ int main(int argc, char** argv) {
       }
       mag_n++;
     }
-    // accumulate Hx
+    // accumulate Hx, Ex
     for (int t = 0; t < NT; ++t) {
       // triangles (HT)
       for (int i = 0; i < NROWS; ++i) {
@@ -1661,6 +1730,7 @@ int main(int argc, char** argv) {
           measure_HP_HE_pet_even(
               t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
               &HE_plus_accum[ind], &HE_minus_accum[ind]);
+          measure_Ex_pet_even(t, i, j, &Ex_accum[ind]);
         }
       }
       // odd petals (HP, HE)
@@ -1670,9 +1740,11 @@ int main(int argc, char** argv) {
           measure_HP_HE_pet_odd(
               t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
               &HE_plus_accum[ind], &HE_minus_accum[ind]);
+          measure_Ex_pet_odd(t, i, j, &Ex_accum[ind]);
         }
       }
       H_n++;
+      Ex_n++;
     }
     // measure
     if ((i+1) % cfg.meas_freq == 0) {
@@ -1702,6 +1774,11 @@ int main(int argc, char** argv) {
     mag[i] = mag_accum[i] / (double)mag_n;
   }
   fwrite(mag, sizeof(double), EROWS*ECOLS, f_Mx);
+  double Ex[EROWS * ECOLS];
+  for (int i = 0; i < EROWS * ECOLS; ++i) {
+    Ex[i] = Ex_accum[i] / (double)Ex_n;
+  }
+  fwrite(Ex, sizeof(double), EROWS*ECOLS, f_Ex);
 
   double HT_plus[EROWS * ECOLS], HT_minus[EROWS * ECOLS];
   double HP_plus[EROWS * ECOLS], HP_minus[EROWS * ECOLS];
