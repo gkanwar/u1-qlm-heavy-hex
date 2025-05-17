@@ -60,3 +60,7 @@ bin/
 
 # Plots
 *.pdf
+
+# Python / Jupyter
+.ipynb_checkpoints/
+__pycache__/
