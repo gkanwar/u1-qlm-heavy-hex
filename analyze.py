@@ -64,16 +64,16 @@ def main():
     KP *= 2
     # HT = (KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
     # HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
-    HT = -KT*HT[...,1] / NT
-    HP = -KP*HP[...,1] / NT
-    HE = (KE * (HE[...,0] - HE[...,1])) / NT
+    HT = -KT*HT[...,1] / (dt*NT)
+    HP = -KP*HP[...,1] / (dt*NT)
+    HE = (KE * (HE[...,0] - HE[...,1])) / (dt*NT)
 
     # HTx = (KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
     # HPx = (KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
-    HTx = -KT*HTx[1] / NT
+    HTx = -KT*HTx[1]
     HPx = -KP*HPx[1]
-    HHEx = (HEx[0] - HEx[1]) / NT
-    HEx = (KE * (HEx[0] - HEx[1])) / NT
+    HHEx = (HEx[0] - HEx[1])
+    HEx = (KE * (HEx[0] - HEx[1]))
     Hx = HTx + HPx + HEx
     HTx[free_tri_mask != 1] = float('nan')
     HPx[free_pet_mask != 1] = float('nan')
