@@ -206,7 +206,7 @@ static void measure_Gx(bool verify) {
 
 
 
-typedef enum {OBC, PBC, RHOMB, RHOMB_STRING} bc_t;
+typedef enum {OBC, PBC, RHOMB, RHOMB_STRING, RHOMB2_STRING} bc_t;
 typedef enum {COLD, HOT, COLD_STRING} init_t;
 
 static void init_geom_obc() {
@@ -222,10 +222,8 @@ static void init_geom_obc() {
 }
 
 static void init_geom_rhomb(bool with_string) {
-  // fix left and bottom zones staggered
   assert(NROWS % 2 == 0);
   for (int x = 0; x < EROWS; ++x) {
-    // const int par = (x/2) % 2;
     for (int y = 0; y < ECOLS; ++y) {
       int i = x*ECOLS + y;
       // trim top right tail
@@ -253,6 +251,21 @@ static void init_geom_rhomb(bool with_string) {
         else {
           geom[i] = with_string;
         }
+      }
+    }
+  }
+}
+
+static void init_geom_rhomb2(bool with_string) {
+  assert(NROWS % 2 == 0);
+  for (int x = 0; x < EROWS; ++x) {
+    for (int y = 0; y < ECOLS; ++y) {
+      int i = x*ECOLS + y;
+      if (x == 0 || y >= ECOLS-2) {
+        geom[i] = with_string;
+      }
+      if (x >= EROWS-2 || y == 0) {
+        geom[i] = false;
       }
     }
   }
@@ -286,6 +299,9 @@ static int init_geom(bc_t bc_kind) {
   }
   else if (bc_kind == RHOMB_STRING) {
     init_geom_rhomb(true);
+  }
+  else if (bc_kind == RHOMB2_STRING) {
+    init_geom_rhomb2(true);
   }
   else {
     return E_VALUE;
@@ -1505,6 +1521,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
       }
       else if (strcmp(optarg, "rhomb_str") == 0) {
         bc_kind = RHOMB_STRING;
+      }
+      else if (strcmp(optarg, "rhomb2_str") == 0) {
+        bc_kind = RHOMB2_STRING;
       }
       else {
         usage(argv[0]);
