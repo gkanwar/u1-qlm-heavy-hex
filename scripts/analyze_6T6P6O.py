@@ -9,11 +9,13 @@ dts = 0.01 * np.arange(1, 5+1)
 KP = 1.0
 data_dir = 'data_new/6T6P6O'
 def main():
+    ed_data = np.loadtxt(f'{data_dir}/ED_thermal_expt_KP1.0.txt')
+    print(f'{ed_data.shape=}')
     fig, axes = plt.subplots(1, 3, sharey=True, figsize=(6,3))
     axes[0].set_title(r'$\left< H_T \right>$')
     axes[1].set_title(r'$\left< H_P \right>$')
     axes[2].set_title(r'$\left< H \right>$')
-    style = dict(marker='o', fillstyle='none', markersize=4)
+    style = dict(marker='o', fillstyle='none', markersize=4, linestyle='')
     # style = dict(linestyle='', linewidth=0.5, capsize=1.5)
     cmap = plt.get_cmap('viridis')
     for i,dt in enumerate(dts):
@@ -40,6 +42,9 @@ def main():
         al.add_errorbar(HPs, xs=1/LTs, ax=axes[1], label=f'$dt={dt:.2f}$', color=cmap(i/len(dts)), **style)
         al.add_errorbar(Hs, xs=1/LTs, ax=axes[2], label=f'$dt={dt:.2f}$', color=cmap(i/len(dts)), **style)
 
+    axes[0].plot(ed_data[:,0], ed_data[:,1], color='k', label='ED', zorder=3)
+    axes[1].plot(ed_data[:,0], ed_data[:,2], color='k', label='ED', zorder=3)
+    axes[2].plot(ed_data[:,0], ed_data[:,3], color='k', label='ED', zorder=3)
     for ax in axes:
         ax.legend(loc='lower right', fontsize=7)
         ax.set_xlabel(r'Temp')
