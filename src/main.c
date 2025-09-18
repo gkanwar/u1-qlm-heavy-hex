@@ -206,8 +206,8 @@ static void measure_Gx(bool verify) {
 
 
 
-typedef enum {OBC, PBC, RHOMB, RHOMB_STRING, RHOMB2_STRING} bc_t;
-typedef enum {COLD, HOT, COLD_STRING} init_t;
+typedef enum {OBC, PBC, RHOMB, RHOMB_STRING, RHOMB2_STRING, GEOM_FILE} bc_t;
+typedef enum {COLD, HOT, COLD_STRING, INIT_FILE} init_t;
 
 static void init_geom_obc() {
   // fix left and bottom zones
@@ -275,7 +275,33 @@ static void init_geom_pbc() {
   // no need to change anything
 }
 
-static int init_geom(bc_t bc_kind) {
+static void init_geom_file(const char* fname) {
+  FILE *f = fopen(fname, "rb");
+  if (f == NULL) {
+    printf("Failed to open geom file %s\n", fname);
+    abort();
+  }
+  size_t geom_size = sizeof(geom)/sizeof(spin_t);
+  size_t nelts = fread(geom, sizeof(spin_t), geom_size, f);
+  fclose(f);
+  if (nelts != geom_size) {
+    printf("Unable to load geom file %s\n", fname);
+    abort();
+  }
+  // check that all values are valid
+  bool valid = true;
+  for (size_t i = 0; i < geom_size; ++i) {
+    if (geom[i] != FREE && geom[i] != DUMMY && geom[i] >= 2) {
+      printf("Invalid geom %d (site %lu)\n", geom[i], i);
+      valid = false;
+    }
+  }
+  if (!valid) {
+    abort();
+  }
+}
+
+static int init_geom(bc_t bc_kind, const char* fname) {
   // mark hex lattice as FREE and other sites as DUMMY
   memset(geom, DUMMY, sizeof(geom));
   for (int i = 0; i < NROWS; ++i) {
@@ -302,6 +328,9 @@ static int init_geom(bc_t bc_kind) {
   }
   else if (bc_kind == RHOMB2_STRING) {
     init_geom_rhomb2(true);
+  }
+  else if (bc_kind == GEOM_FILE) {
+    init_geom_file(fname);
   }
   else {
     return E_VALUE;
@@ -392,7 +421,61 @@ void init_lat_hot_tri() {
   }
 }
 
-int init_lat(init_t init_kind, int string_sep) {
+// file init uses a time-independent array
+static spin_t init_file_buffer[EROWS * ECOLS];
+void init_lat_file(const char* fname) {
+  FILE *f = fopen(fname, "rb");
+  if (f == NULL) {
+    printf("Failed to open lattice init file %s\n", fname);
+    abort();
+  }
+  size_t init_size = sizeof(init_file_buffer)/sizeof(spin_t);
+  size_t nelts = fread(init_file_buffer, sizeof(spin_t), init_size, f);
+  fclose(f);
+  if (nelts != init_size) {
+    printf("Unable to load lattice init file %s\n", fname);
+    abort();
+  }
+  // check that init matches geom
+  bool valid = true;
+  assert(sizeof(geom) == sizeof(init_file_buffer));
+  for (size_t i = 0; i < init_size; ++i) {
+    if (geom[i] == DUMMY) {
+      if (init_file_buffer[i] != 0xff) {
+        printf("Init file set dummy site %lu to %d\n", i, init_file_buffer[i]);
+        valid = false;
+      }
+    }
+    else if (geom[i] == FREE) {
+      if (init_file_buffer[i] >= 2) {
+        printf("Init file set site %lu to bad value %d\n", i, init_file_buffer[i]);
+        valid = false;
+      }
+    }
+    else {
+      assert(geom[i] <= 2);
+      if (init_file_buffer[i] == 0xff) {
+        init_file_buffer[i] = geom[i];
+      }
+      if (init_file_buffer[i] != geom[i]) {
+        printf(
+            "Init file overwrote fixed geom site %lu from %d to %d\n",
+            i, geom[i], init_file_buffer[i]);
+        valid = false;
+      }
+    }
+  }
+  if (!valid) {
+    abort();
+  }
+  // write into lattice across all timeslices
+  assert(sizeof(lattice) == NT * sizeof(init_file_buffer));
+  for (int t = 0; t < NT; ++t) {
+    memcpy(&lattice[t * init_size], init_file_buffer, sizeof(init_file_buffer));
+  }
+}
+
+int init_lat(init_t init_kind, int string_sep, const char* fname) {
   memset(lattice, 0xff, sizeof(lattice));
   memset(mag_accum, 0.0, sizeof(mag_accum));
   memset(Ex_accum, 0.0, sizeof(Ex_accum));
@@ -414,6 +497,9 @@ int init_lat(init_t init_kind, int string_sep) {
   else if (init_kind == COLD_STRING) {
     init_lat_cold();
     init_lat_add_string(string_sep);
+  }
+  else if (init_kind == INIT_FILE) {
+    init_lat_file(fname);
   }
   else {
     return E_VALUE;
@@ -1459,7 +1545,8 @@ typedef struct {
 void usage(const char* prog) {
   printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
          "-i <n_iter> -s <save_freq> -m <meas_freq> "
-         "[-b (obc|pbc|rhomb|rhomb_str)] [-c (cold|hot|cold_str)] "
+         "[-b (obc|pbc|rhomb|rhomb_str|file)] [-c (cold|hot|cold_str|file)] "
+         "[-y geom_file] [-z init_file] "
          "[-x string_sep] [-r <seed>]\n", prog);
 }
 
@@ -1475,9 +1562,11 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   double dt, KP, KE;
   bc_t bc_kind = PBC;
   init_t init_kind = HOT;
+  const char* geom_file = NULL;
+  const char* init_file = NULL;
   const char* prefix;
   char c;
-  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:")) != -1) {
+  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:y:z:")) != -1) {
     if (c == 't') {
       dt = atof(optarg);
       set_dt = true;
@@ -1525,6 +1614,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
       else if (strcmp(optarg, "rhomb2_str") == 0) {
         bc_kind = RHOMB2_STRING;
       }
+      else if (strcmp(optarg, "file") == 0) {
+        bc_kind = GEOM_FILE;
+      }
       else {
         usage(argv[0]);
         printf("Invalid -b argument: %s\n", optarg);
@@ -1545,11 +1637,20 @@ int parse_args(int argc, char** argv, config_t* cfg) {
       else if (strcmp(optarg, "hot") == 0) {
         init_kind = HOT;
       }
+      else if (strcmp(optarg, "file") == 0) {
+        init_kind = INIT_FILE;
+      }
       else {
         usage(argv[0]);
         printf("Invalid -c argument: %s\n", optarg);
         return E_ARGS;
       }
+    }
+    else if (c == 'y') {
+      geom_file = optarg;
+    }
+    else if (c == 'z') {
+      init_file = optarg;
     }
     else if (c == '?') {
       usage(argv[0]);
@@ -1581,6 +1682,12 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   if (init_kind == COLD_STRING && !set_string_sep) {
     printf("Must provide string_sep for cold string init\n");
     return E_ARGS;
+  }
+  if (init_kind == INIT_FILE && !init_file) {
+    printf("Must provide init_file for file init\n");
+  }
+  if (bc_kind == GEOM_FILE && !geom_file) {
+    printf("Must provide geom_file for file geom\n");
   }
 
   size_t len = strlen(prefix);
@@ -1627,10 +1734,10 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   cfg->KP = KP;
   cfg->KE = KE;
   init_couplings(dt, KP, KE);
-  ret = init_geom(bc_kind);
+  ret = init_geom(bc_kind, geom_file);
   assert(ret == E_OK);
   print_geom();
-  ret = init_lat(init_kind, cfg->string_sep);
+  ret = init_lat(init_kind, cfg->string_sep, init_file);
   assert(ret == E_OK);
   init_lat_apply_geom();
   measure_Gx(false);
