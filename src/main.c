@@ -105,6 +105,15 @@ static spin_t lattice[NT * EROWS * ECOLS];
 #define DUMMY 0xaa
 static spin_t geom[EROWS * ECOLS];
 
+/// Dirac strings can be introduced on petals only.
+///  - for odd petals they modify the interaction with the triangle above
+///  - for even petals they modify the interaction with the left triangle
+/// In either case, the petal and triangle see each other as the opposite
+/// of their value.
+
+// Which odd petals carry a Dirac string (other sites ignored)
+static uint8_t dirac_str[EROWS * ECOLS];
+
 // Gauss Law defects, just for tracking and validation
 static int defects[NROWS * NCOLS];
 
@@ -180,6 +189,14 @@ static void measure_Gx(bool verify) {
           2*lattice[ind_tri(t, i_fwd, djA)],
           -1+2*lattice[ind_pet_odd(t, i, sjA)]
         };
+        int dirac[12] = {
+          0, dirac_str[ind_pet_even(t, i, djA)],
+          0, dirac_str[ind_pet_even(t, i, djB)],
+          0, dirac_str[ind_pet_odd(t, i, sjB)],
+          0, dirac_str[ind_pet_even(t, i_fwd, djB)],
+          0, dirac_str[ind_pet_even(t, i_fwd, djA)],
+          0, dirac_str[ind_pet_odd(t, i, sjA)]
+        };
         // printf("%d %d %d %d %d %d %d %d %d %d %d %d\n",
         //        s[0], s[1], s[2], s[3],
         //        s[4], s[5], s[6], s[7],
@@ -187,7 +204,7 @@ static void measure_Gx(bool verify) {
         int G = 0;
         for (int k = 0; k < 12; ++k) {
           // wrap difference into {-1, 1}
-          G += wrap_mod4(s[k] - s[(k+1)%12]);
+          G += wrap_mod4(s[k] - s[(k+1)%12] + dirac[k]);
         }
         if (t == 0) {
           if (!verify) {
@@ -540,6 +557,26 @@ void init_lat_apply_geom() {
   }
 }
 
+static int init_dirac_str(const char* fname) {
+  if (fname == NULL) {
+    memset(dirac_str, 0, sizeof(dirac_str));
+    return E_OK;
+  }
+  FILE *f = fopen(fname, "rb");
+  if (f == NULL) {
+    printf("Failed to open dirac str file %s\n", fname);
+    abort();
+  }
+  size_t size = sizeof(dirac_str)/sizeof(uint8_t);
+  size_t nelts = fread(dirac_str, sizeof(uint8_t), size, f);
+  fclose(f);
+  if (nelts != size) {
+    printf("Unabled to load dirac str file %s\n", fname);
+    abort();
+  }
+  return E_OK;
+}
+
 // bit mask 00 | tfwd | tbwd | left | right | up | down
 //  - up/down bonds are irrelevant for petals
 //  - left/right bonds are three-way for petals
@@ -691,12 +728,15 @@ void sample_tri_bonds() {
 
         // relevant petals
         int j_odd = j/2;
+        // dirac string between tri and petals to the right or below
+        bool has_dirac_str_r = dirac_str[ind_pet_even(0, i, j)];
+        bool has_dirac_str_ud = dirac_str[ind_pet_odd(0, pet_i_ud, j_odd)] && (UD == DOWN);
         bool pet_bwd_l = lattice[ind_pet_even(t, i, j_l)];
-        bool pet_bwd_r = lattice[ind_pet_even(t, i, j)];
-        bool pet_bwd_ud = lattice[ind_pet_odd(t, pet_i_ud, j_odd)];
+        bool pet_bwd_r = (lattice[ind_pet_even(t, i, j)] + has_dirac_str_r) % 2;
+        bool pet_bwd_ud = (lattice[ind_pet_odd(t, pet_i_ud, j_odd)] + has_dirac_str_ud) % 2;
         bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
-        bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
-        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+        bool pet_fwd_r = (lattice[ind_pet_even(t_fwd, i, j)] + has_dirac_str_r) % 2;
+        bool pet_fwd_ud = (lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)] + has_dirac_str_ud) % 2;
         bool pet_l_fixed = geom[ind_pet_even(0, i, j_l)] != FREE;
         bool pet_r_fixed = geom[ind_pet_even(0, i, j)] != FREE;
         bool pet_ud_fixed = geom[ind_pet_odd(0, pet_i_ud, j_odd)] != FREE;
@@ -907,13 +947,14 @@ void sample_pet_bonds() {
       for (int j = 0; j < 2*NCOLS; ++j) {
         // relevant petals
         bool pet = lattice[ind_pet_even(t, i, j)];
+        bool has_dirac_str = dirac_str[ind_pet_even(0, i, j)];
         int t_fwd = wrap_t(t+1);
         bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
 
-        // relevant triangles
+        // relevant triangles (LEFT triangles shifted by dirac str)
         int j_l = j;
         int j_r = wrap_dj(j+1);
-        bool tri_fwd_l = lattice[ind_tri(t, i, j_l)];
+        bool tri_fwd_l = (lattice[ind_tri(t, i, j_l)] + has_dirac_str) % 2;
         bool tri_fwd_r = lattice[ind_tri(t, i, j_r)];
 
         // bonds
@@ -935,6 +976,7 @@ void sample_pet_bonds() {
       for (int j = 0; j < NCOLS; ++j) {
         // relevant petals
         bool pet = lattice[ind_pet_odd(t, i, j)];
+        bool has_dirac_str = dirac_str[ind_pet_odd(0, i, j)];
         int t_fwd = wrap_t(t+1);
         int t_bwd = wrap_t(t-1);
         bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
@@ -948,10 +990,12 @@ void sample_pet_bonds() {
         bool pet_dr = lattice[ind_pet_even(t, i_d, j_even_r)];
         bool pet_dl = lattice[ind_pet_even(t, i_d, j_even_l)];
 
-        // relevant triangles
-        bool tri_fwd_u = lattice[ind_tri(t, i_u, j_even)];
+        // relevant triangles (UP triangles shifted by dirac str)
+        bool tri_fwd_u = (
+            lattice[ind_tri(t, i_u, j_even)] + has_dirac_str) % 2;
         bool tri_fwd_d = lattice[ind_tri(t, i_d, j_even)];
-        bool tri_bwd_u = lattice[ind_tri(t_bwd, i_u, j_even)];
+        bool tri_bwd_u = (
+            lattice[ind_tri(t_bwd, i_u, j_even)] + has_dirac_str) % 2;
         bool tri_bwd_d = lattice[ind_tri(t_bwd, i_d, j_even)];
         bool tri_u_fixed = geom[ind_tri(0, i_u, j_even)] != FREE;
         bool tri_d_fixed = geom[ind_tri(0, i_d, j_even)] != FREE;
@@ -1546,7 +1590,7 @@ void usage(const char* prog) {
   printf("Usage: %s -t <dt> -p <KP> -e <KE> -f <out_prefix> "
          "-i <n_iter> -s <save_freq> -m <meas_freq> "
          "[-b (obc|pbc|rhomb|rhomb_str|file)] [-c (cold|hot|cold_str|file)] "
-         "[-y geom_file] [-z init_file] "
+         "[-y geom_file] [-z init_file] [-d dirac_str_file] "
          "[-x string_sep] [-r <seed>]\n", prog);
 }
 
@@ -1564,9 +1608,10 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   init_t init_kind = HOT;
   const char* geom_file = NULL;
   const char* init_file = NULL;
+  const char* dirac_str_file = NULL;
   const char* prefix;
   char c;
-  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:y:z:")) != -1) {
+  while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:y:z:d:")) != -1) {
     if (c == 't') {
       dt = atof(optarg);
       set_dt = true;
@@ -1652,6 +1697,9 @@ int parse_args(int argc, char** argv, config_t* cfg) {
     else if (c == 'z') {
       init_file = optarg;
     }
+    else if (c == 'd') {
+      dirac_str_file = optarg;
+    }
     else if (c == '?') {
       usage(argv[0]);
       printf("Missing arg or invalid -%c\n", optopt);
@@ -1734,6 +1782,8 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   cfg->KP = KP;
   cfg->KE = KE;
   init_couplings(dt, KP, KE);
+  ret = init_dirac_str(dirac_str_file);
+  assert(ret == E_OK);
   ret = init_geom(bc_kind, geom_file);
   assert(ret == E_OK);
   print_geom();
