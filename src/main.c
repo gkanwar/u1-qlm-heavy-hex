@@ -111,7 +111,8 @@ static spin_t geom[EROWS * ECOLS];
 /// In either case, the petal and triangle see each other as the opposite
 /// of their value.
 
-// Which odd petals carry a Dirac string (other sites ignored)
+// Which petals carry a Dirac string (triangles ignored)
+// NOTE: Dirac string implementation for EVEN petals is not yet tested!
 static uint8_t dirac_str[EROWS * ECOLS];
 
 // Gauss Law defects, just for tracking and validation
@@ -174,6 +175,10 @@ static void measure_Gx(bool verify) {
           djB = wrap_dj(djB+1);
           djC = wrap_dj(djC+1);
         }
+        // geometry around heavy hex is
+        // 0 - 1 - 2 - 3 - 4
+        // 11              5
+        // 10- 9 - 8 - 7 - 6
         // triangles are {0,2}, petals are {1,3}
         int s[12] = {
           2*lattice[ind_tri(t, i, djA)],
@@ -190,12 +195,12 @@ static void measure_Gx(bool verify) {
           -1+2*lattice[ind_pet_odd(t, i, sjA)]
         };
         int dirac[12] = {
-          0, dirac_str[ind_pet_even(t, i, djA)],
-          0, dirac_str[ind_pet_even(t, i, djB)],
-          0, dirac_str[ind_pet_odd(t, i, sjB)],
-          0, dirac_str[ind_pet_even(t, i_fwd, djB)],
-          0, dirac_str[ind_pet_even(t, i_fwd, djA)],
-          0, dirac_str[ind_pet_odd(t, i, sjA)]
+          dirac_str[ind_pet_even(0, i, djA)], 0,
+          dirac_str[ind_pet_even(0, i, djB)], 0,
+          dirac_str[ind_pet_odd(0, i, sjB)], 0,
+          0, dirac_str[ind_pet_even(0, i_fwd, djB)],
+          0, dirac_str[ind_pet_even(0, i_fwd, djA)],
+          0, dirac_str[ind_pet_odd(0, i, sjA)]
         };
         // printf("%d %d %d %d %d %d %d %d %d %d %d %d\n",
         //        s[0], s[1], s[2], s[3],
@@ -204,7 +209,7 @@ static void measure_Gx(bool verify) {
         int G = 0;
         for (int k = 0; k < 12; ++k) {
           // wrap difference into {-1, 1}
-          G += wrap_mod4(s[k] - s[(k+1)%12] + dirac[k]);
+          G += wrap_mod4(s[k] - s[(k+1)%12] + 2*dirac[k]);
         }
         if (t == 0) {
           if (!verify) {
@@ -213,6 +218,7 @@ static void measure_Gx(bool verify) {
           }
         }
         if (defects[i*NCOLS + j] != G) {
+          printf("G[%d,%d,%d] = %d (vs %d)\n", t, i, j, G, defects[i*NCOLS + j]);
           fail = true;
         }
       }
@@ -728,18 +734,25 @@ void sample_tri_bonds() {
 
         // relevant petals
         int j_odd = j/2;
-        // dirac string between tri and petals to the right or below
+        // dirac string affects petals to the right or below
+        bool has_dirac_str_l = dirac_str[ind_pet_even(0, i, j_l)];
         bool has_dirac_str_r = dirac_str[ind_pet_even(0, i, j)];
-        bool has_dirac_str_ud = dirac_str[ind_pet_odd(0, pet_i_ud, j_odd)] && (UD == DOWN);
+        bool has_dirac_str_ud = dirac_str[ind_pet_odd(0, pet_i_ud, j_odd)];
+        bool has_dirac_str_pet_ud = has_dirac_str_ud && (UD == DOWN);
         bool pet_bwd_l = lattice[ind_pet_even(t, i, j_l)];
-        bool pet_bwd_r = (lattice[ind_pet_even(t, i, j)] + has_dirac_str_r) % 2;
-        bool pet_bwd_ud = (lattice[ind_pet_odd(t, pet_i_ud, j_odd)] + has_dirac_str_ud) % 2;
+        bool pet_bwd_r = lattice[ind_pet_even(t, i, j)] ^ has_dirac_str_r;
+        bool pet_bwd_ud = lattice[ind_pet_odd(t, pet_i_ud, j_odd)] ^ has_dirac_str_pet_ud;
         bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
-        bool pet_fwd_r = (lattice[ind_pet_even(t_fwd, i, j)] + has_dirac_str_r) % 2;
-        bool pet_fwd_ud = (lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)] + has_dirac_str_ud) % 2;
+        bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)] ^ has_dirac_str_r;
+        bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)] ^ has_dirac_str_pet_ud;
         bool pet_l_fixed = geom[ind_pet_even(0, i, j_l)] != FREE;
         bool pet_r_fixed = geom[ind_pet_even(0, i, j)] != FREE;
         bool pet_ud_fixed = geom[ind_pet_odd(0, pet_i_ud, j_odd)] != FREE;
+
+        // dirac string also affects triangles through petals
+        tri_r ^= has_dirac_str_r;
+        tri_l ^= has_dirac_str_l;
+        tri_ud ^= has_dirac_str_ud;
 
         // bonds
         // T_FWD / T_BWD
@@ -787,7 +800,7 @@ void sample_tri_bonds() {
 }
 
 // flood fill expanding from sites already pushed on the queue
-void flood_fill_tri(spin_t spin, int gen, bool *temporal_wrap, int *count) {
+void flood_fill_tri(spin_t flip, int gen, bool *temporal_wrap, int *count) {
   *temporal_wrap = false;
   *count = 0;
   while (!q_empty()) {
@@ -796,7 +809,7 @@ void flood_fill_tri(spin_t spin, int gen, bool *temporal_wrap, int *count) {
     int t = x.t, i = x.i, j = x.j;
     assert(seen.tri[t][i][j] == gen);
     int prev_sheet = sheet.tri[t][i][j];
-    lattice[ind_tri(t, i, j)] = spin;
+    lattice[ind_tri(t, i, j)] ^= flip;
     bond_dirs_t bond_dirs = bonds.tri[t][i][j];
     // TFWD
     if (bond_tfwd(bond_dirs)) {
@@ -883,7 +896,6 @@ double update_tri_spins() {
   int count;
   int acc = 0, rej = 0;
   // outer loop, fixed
-  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -897,7 +909,8 @@ double update_tri_spins() {
         seen.tri[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, 0});
-        flood_fill_tri(geom[ind_tri(0, i, j)], gen, &temporal_wrap, &count);
+        // geom[ind_tri(0, i, j)]
+        flood_fill_tri(0, gen, &temporal_wrap, &count);
         assert(q_empty());
         rej += count;
       }
@@ -914,8 +927,9 @@ double update_tri_spins() {
         seen.tri[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, 0});
-        spin_t prev_val = lattice[ind_tri(t, i, j)];
-        flood_fill_tri(rand_bool(), gen, &temporal_wrap, &count);
+        // spin_t prev_val = lattice[ind_tri(t, i, j)];
+        spin_t flip = rand_bool();
+        flood_fill_tri(flip, gen, &temporal_wrap, &count);
         // printf("New cluster (%d)\n", count);
         assert(q_empty());
         if (temporal_wrap) { // unflip if wrapped
@@ -924,7 +938,7 @@ double update_tri_spins() {
           gen += 1;
           seen.tri[t][i][j] = gen;
           q_push((coord_t){t, i, j, 0});
-          flood_fill_tri(prev_val, gen, &temporal_wrap, &count);
+          flood_fill_tri(flip, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
           rej += count;
@@ -954,7 +968,7 @@ void sample_pet_bonds() {
         // relevant triangles (LEFT triangles shifted by dirac str)
         int j_l = j;
         int j_r = wrap_dj(j+1);
-        bool tri_fwd_l = (lattice[ind_tri(t, i, j_l)] + has_dirac_str) % 2;
+        bool tri_fwd_l = lattice[ind_tri(t, i, j_l)] ^ has_dirac_str;
         bool tri_fwd_r = lattice[ind_tri(t, i, j_r)];
 
         // bonds
@@ -976,7 +990,6 @@ void sample_pet_bonds() {
       for (int j = 0; j < NCOLS; ++j) {
         // relevant petals
         bool pet = lattice[ind_pet_odd(t, i, j)];
-        bool has_dirac_str = dirac_str[ind_pet_odd(0, i, j)];
         int t_fwd = wrap_t(t+1);
         int t_bwd = wrap_t(t-1);
         bool pet_fwd = lattice[ind_pet_odd(t_fwd, i, j)];
@@ -985,17 +998,18 @@ void sample_pet_bonds() {
         int j_even = 2*j + (i % 2);
         int j_even_r = j_even;
         int j_even_l = wrap_dj(j_even - 1);
-        bool pet_ur = lattice[ind_pet_even(t, i_u, j_even_r)];
-        bool pet_ul = lattice[ind_pet_even(t, i_u, j_even_l)];
-        bool pet_dr = lattice[ind_pet_even(t, i_d, j_even_r)];
+        bool has_dirac_str = dirac_str[ind_pet_odd(0, i, j)];
+        bool has_dirac_str_ur = dirac_str[ind_pet_even(0, i_u, j_even_r)];
+        bool has_dirac_str_dr = dirac_str[ind_pet_even(0, i_d, j_even_r)];
+        bool pet_ur = lattice[ind_pet_even(t, i_u, j_even_r)] ^ has_dirac_str_ur ^ has_dirac_str;
+        bool pet_ul = lattice[ind_pet_even(t, i_u, j_even_l)] ^ has_dirac_str;
+        bool pet_dr = lattice[ind_pet_even(t, i_d, j_even_r)] ^ has_dirac_str_dr;
         bool pet_dl = lattice[ind_pet_even(t, i_d, j_even_l)];
 
         // relevant triangles (UP triangles shifted by dirac str)
-        bool tri_fwd_u = (
-            lattice[ind_tri(t, i_u, j_even)] + has_dirac_str) % 2;
+        bool tri_fwd_u = lattice[ind_tri(t, i_u, j_even)] ^ has_dirac_str;
         bool tri_fwd_d = lattice[ind_tri(t, i_d, j_even)];
-        bool tri_bwd_u = (
-            lattice[ind_tri(t_bwd, i_u, j_even)] + has_dirac_str) % 2;
+        bool tri_bwd_u = lattice[ind_tri(t_bwd, i_u, j_even)] ^ has_dirac_str;
         bool tri_bwd_d = lattice[ind_tri(t_bwd, i_d, j_even)];
         bool tri_u_fixed = geom[ind_tri(0, i_u, j_even)] != FREE;
         bool tri_d_fixed = geom[ind_tri(0, i_d, j_even)] != FREE;
@@ -1036,7 +1050,7 @@ void sample_pet_bonds() {
 }
 
 // flood fill expanding from sites already pushed on the queue
-void flood_fill_pet(spin_t spin, int gen, bool *temporal_wrap, int *count) {
+void flood_fill_pet(spin_t flip, int gen, bool *temporal_wrap, int *count) {
   *temporal_wrap = false;
   *count = 0;
   while (!q_empty()) {
@@ -1047,7 +1061,7 @@ void flood_fill_pet(spin_t spin, int gen, bool *temporal_wrap, int *count) {
     if (x.p == EVEN) {
       assert(seen.pet_even[t][i][j] == gen);
       int prev_sheet = sheet.pet_even[t][i][j];
-      lattice[ind_pet_even(t, i, j)] = spin;
+      lattice[ind_pet_even(t, i, j)] ^= flip;
       // printf("    (%d,%d,%d)\n",
       //        ind_pet_even(t, i, j)/(EROWS*ECOLS),
       //        (ind_pet_even(t, i, j)%(EROWS*ECOLS))/ECOLS,
@@ -1146,7 +1160,7 @@ void flood_fill_pet(spin_t spin, int gen, bool *temporal_wrap, int *count) {
     else {
       assert(seen.pet_odd[t][i][j] == gen);
       int prev_sheet = sheet.pet_odd[t][i][j];
-      lattice[ind_pet_odd(t, i, j)] = spin;
+      lattice[ind_pet_odd(t, i, j)] ^= flip;
       // printf("    (%d,%d,%d) sheet %d\n",
       //        ind_pet_odd(t, i, j)/(EROWS*ECOLS),
       //        (ind_pet_odd(t, i, j)%(EROWS*ECOLS))/ECOLS,
@@ -1255,7 +1269,6 @@ double update_pet_spins() {
   int count;
   int acc = 0, rej = 0;
   // outer loop even, fixed
-  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < 2*NCOLS; ++j) {
@@ -1269,14 +1282,14 @@ double update_pet_spins() {
         seen.pet_even[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        flood_fill_pet(geom[ind_pet_even(0, i, j)], gen, &temporal_wrap, &count);
+        // geom[ind_pet_even(0, i, j)]
+        flood_fill_pet(0, gen, &temporal_wrap, &count);
         assert(q_empty());
         rej += count;
       }
     }
   }
   // outer loop odd, fixed
-  // TODO: do we need to run this loop?
   for (int t = 0; t < NT; ++t) {
     for (int i = 0; i < NROWS; ++i) {
       for (int j = 0; j < NCOLS; ++j) {
@@ -1290,7 +1303,8 @@ double update_pet_spins() {
         seen.pet_odd[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        flood_fill_pet(geom[ind_pet_odd(0, i, j)], gen, &temporal_wrap, &count);
+        // geom[ind_pet_odd(0, i, j)]
+        flood_fill_pet(0, gen, &temporal_wrap, &count);
         assert(q_empty());
         rej += count;
       }
@@ -1307,8 +1321,9 @@ double update_pet_spins() {
         seen.pet_even[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, EVEN});
-        spin_t prev_val = lattice[ind_pet_even(t, i, j)];
-        flood_fill_pet(rand_bool(), gen, &temporal_wrap, &count);
+        // spin_t prev_val = lattice[ind_pet_even(t, i, j)];
+        spin_t flip = rand_bool();
+        flood_fill_pet(flip, gen, &temporal_wrap, &count);
         // printf("New even cluster (%d)\n", count);
         assert(q_empty());
         if (temporal_wrap) { // unflip if wrapped
@@ -1317,7 +1332,7 @@ double update_pet_spins() {
           gen += 1;
           seen.pet_even[t][i][j] = gen;
           q_push((coord_t){t, i, j, EVEN});
-          flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
+          flood_fill_pet(flip, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
           rej += count;
@@ -1341,8 +1356,9 @@ double update_pet_spins() {
         seen.pet_odd[t][i][j] = gen;
         assert(q_empty());
         q_push((coord_t){t, i, j, ODD});
-        spin_t prev_val = lattice[ind_pet_odd(t, i, j)];
-        flood_fill_pet(rand_bool(), gen, &temporal_wrap, &count);
+        // spin_t prev_val = lattice[ind_pet_odd(t, i, j)];
+        spin_t flip = rand_bool();
+        flood_fill_pet(flip, gen, &temporal_wrap, &count);
         // printf("New odd cluster (%d)\n", count);
         assert(q_empty());
         if (temporal_wrap) { // unflip if wrapped
@@ -1351,7 +1367,7 @@ double update_pet_spins() {
           gen += 1;
           seen.pet_odd[t][i][j] = gen;
           q_push((coord_t){t, i, j, ODD});
-          flood_fill_pet(prev_val, gen, &temporal_wrap, &count);
+          flood_fill_pet(flip, gen, &temporal_wrap, &count);
           assert(q_empty());
           assert(count == prev_count);
           rej += count;
