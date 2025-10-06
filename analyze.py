@@ -204,6 +204,7 @@ def main():
     ax.set_xlabel(r'$M_T$')
     ax.set_ylabel(r'$M_P$')
     ax.set_aspect(1)
+    fig.suptitle(prefix)
     fig.savefig(f'{figs_prefix}.M_hist.pdf')
 
     # fig, axes = plt.subplots(4,1, sharex=True)
@@ -224,6 +225,7 @@ def main():
         axl.plot(*al.bin_data(Hi, binsize=10), label=label)
         axl.legend()
         axr.hist(Hi, bins=30, orientation='horizontal')
+    fig.suptitle(prefix)
     fig.savefig(f'{figs_prefix}.H_trace.pdf')
 
     # N_TRI = NX * NY / 4
