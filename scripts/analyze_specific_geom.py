@@ -1,14 +1,15 @@
 import analysis as al
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import paper_plt
 paper_plt.load_basic_config()
 
-Ts = np.array([16, 32, 64, 128])
-dts = 0.01 * np.arange(1, 5+1)
-data_dir = 'data_new/16T29P10O'
-def analyze(KP_str):
+def analyze(KP_str, geom):
+    Ts = np.array([16, 32, 64, 128])
+    dts = 0.01 * np.arange(1, 5+1)
+    data_dir = f'data_new/{geom}'
     KP = float(KP_str)
     # ed_data = np.loadtxt(f'{data_dir}/ED_thermal_expt_KP1.0.txt')
     # print(f'{ed_data.shape=}')
@@ -52,14 +53,18 @@ def analyze(KP_str):
         ax.legend(loc='lower right', fontsize=7)
         ax.set_xlabel(r'Temp')
 
-    fig.suptitle(rf'16T29P10O ($K_P = {KP_str}$)')
+    fig.suptitle(rf'{geom} ($K_P = {KP_str}$)')
     fig.set_tight_layout(True)
     os.makedirs(f'{data_dir}/figs', exist_ok=True)
     fig.savefig(f'{data_dir}/figs/analyze_sweep_KP{KP_str}.pdf')
 
 def main():
-    for KP in ['0.40', '0.70', '2.00']:
-        analyze(KP)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--KP', type=str, required=True)
+    parser.add_argument('--geom', type=str, required=True)
+    args = parser.parse_args()
+    # for KP in ['0.40', '0.70', '2.00']:
+    analyze(args.KP, args.geom)
 
 if __name__ == '__main__':
     main()
