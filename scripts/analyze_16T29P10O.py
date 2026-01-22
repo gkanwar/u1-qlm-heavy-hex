@@ -30,7 +30,7 @@ def analyze(KP_str):
             HT = np.fromfile(f'{prefix}.HT.dat', dtype=np.int64).reshape(-1, 2)[:,1]
             HP = np.fromfile(f'{prefix}.HP.dat', dtype=np.int64).reshape(-1, 2)[:,1]
             HT = al.bin_data(-HT[int(0.1*len(HT)):]/(dt*T), binsize=100)[1]
-            HP = al.bin_data(-KP*HP[int(0.1*len(HP)):]/(dt*T), binsize=100)[1]
+            HP = al.bin_data(-HP[int(0.1*len(HP)):]/(dt*T), binsize=100)[1] # without KP
             HTs.append(al.bootstrap(HT, Nboot=1000, f=al.rmean))
             HPs.append(al.bootstrap(HP, Nboot=1000, f=al.rmean))
             Hs.append(al.bootstrap(HT+HP, Nboot=1000, f=al.rmean))
