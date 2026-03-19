@@ -60,13 +60,27 @@ def main():
     assert HT.shape[0] == HP.shape[0] == HE.shape[0]
     print(f'{HT.shape=}')
     # DB conventions
-    KT = 4
-    KP *= 2
+    # KT = 4
+    # KP *= 2
+    # GK conventions
+    KT = 1
     # HT = (KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
     # HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
     HT = -KT*HT[...,1] / (dt*NT)
     HP = -KP*HP[...,1] / (dt*NT)
     HE = (KE * (HE[...,0] - HE[...,1])) / (dt*NT)
+
+    FTx = (HTx[0] + HTx[1]) - (1/4)
+    FPx = (HPx[0] + HPx[1]) - (1/2)
+    print(np.max(FTx[free_tri_mask == 1]))
+    print(np.min(FTx[free_tri_mask == 1]))
+    print(np.max(FPx[free_pet_mask == 1]))
+    print(np.min(FPx[free_pet_mask == 1]))
+    # subtraction??
+    FTx -= np.mean(FTx[free_tri_mask == 1])
+    FPx -= np.mean(FPx[free_pet_mask == 1])
+    FTx[free_tri_mask != 1] = float('nan')
+    FPx[free_pet_mask != 1] = float('nan')
 
     # HTx = (KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
     # HPx = (KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
@@ -92,6 +106,7 @@ def main():
     MPx[free_pet_mask != 1] = float('nan')
     Ex[free_pet_mask != 1] = float('nan')
 
+    ### Plot MT, MP, MT+MP, EP
     fig, axes = plt.subplots(
         2, 2, layout='compressed', figsize=(10,6), squeeze=False)
     ax = axes[0,0]
@@ -138,6 +153,7 @@ def main():
     cmap = plt.get_cmap('viridis').copy()
     cmap.set_bad(color='k')
 
+    ### Plot localized energies
     fig, axes = plt.subplots(
         2, 4, layout='compressed', figsize=(10,6),
         gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
@@ -180,6 +196,47 @@ def main():
     fig.suptitle(prefix)
     fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
 
+    ### Plot flippabilities
+    cmap = plt.get_cmap('RdBu').copy()
+    cmap.set_bad(color='w')
+    cmap2 = plt.get_cmap('RdBu').copy()
+    cmap2.set_bad(color='w', alpha=0.0)
+    kwargs = dict(interpolation='nearest')#, vmin=-1.0, vmax=1.0)
+
+    fig, axes = plt.subplots(
+        2, 4, layout='compressed', figsize=(10,6),
+        gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
+    ax = axes[0,0]
+    cax = axes[0,1]
+    ax.set_title(r'$F_T(x)$')
+    cs = ax.imshow(FTx, cmap=cmap, **kwargs)
+    ax.set_aspect(1)
+    fig.colorbar(cs, cax=cax)
+    ax = axes[0,2]
+    cax = axes[0,3]
+    ax.set_title(r'$F_P(x)$')
+    cs = ax.imshow(-FPx, cmap=cmap, **kwargs)
+    ax.set_aspect(1)
+    fig.colorbar(cs, cax=cax)
+    ax = axes[1,0]
+    cax = axes[1,1]
+    ax.set_title(r'$F_T(x), F_P(x)$')
+    cs = ax.imshow(FTx, cmap=cmap, **kwargs)
+    cs = ax.imshow(-FPx, cmap=cmap2, **kwargs)
+    ax.set_aspect(1)
+    fig.colorbar(cs, cax=cax)
+    # ax = axes[1,2]
+    # cax = axes[1,3]
+    # ax.set_title(r'$H(x)$')
+    # cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    # ax.set_aspect(1)
+    # bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+    # values = geom[bounds]
+    # ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+    # fig.colorbar(cs, cax=cax)
+    fig.suptitle(prefix)
+    fig.savefig(f'{figs_prefix}.Fx.pdf', dpi=600)
+    
     # fig, ax = plt.subplots(1,1)
     # ens_f = ens.astype(np.float64)
     # ens_f[:,:,geom != 0xff] = float('nan')
@@ -198,6 +255,7 @@ def main():
     MT = MT / float(N_FREE_TRI * NT) - 0.5
     MP = MP / float(N_FREE_PET * NT) - 0.5
 
+    ### Plot order param histograms
     fig, ax = plt.subplots(1,1)
     bins = np.linspace(-0.5, 0.5, num=51, endpoint=True)
     ax.hist2d(MT, MP, bins=bins) #, range=[[-0.5, 1.5], [-0.5, 1.5]])
@@ -218,6 +276,7 @@ def main():
     # axes[3].legend()
     # fig.savefig(f'{figs_prefix}.M_trace.pdf')
 
+    ### Plot MCMC histories
     fig, axes = plt.subplots(3, 2, figsize=(6,6), sharey='row')
     for (axl, axr), Hi, label in zip(axes, [HT, HP, HE], ['$H_T$', '$H_P$', '$H_E$']):
         xs = np.arange(len(Hi))
@@ -231,8 +290,7 @@ def main():
     # N_TRI = NX * NY / 4
     # N_PET = NX * NY*3 / 8
     # H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
-    # DB convention
-    H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
+    H_est = al.bootstrap(HT + HP + HE, Nboot=1000, f=al.rmean)
     print(f'Ground state energy: {H_est}')
         
     # plt.show()
