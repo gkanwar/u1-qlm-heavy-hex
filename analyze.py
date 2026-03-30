@@ -64,35 +64,37 @@ def main():
     # KP *= 2
     # GK conventions
     KT = 1
-    # HT = (KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
-    # HP = (KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
-    HT = -KT*HT[...,1] / (dt*NT)
-    HP = -KP*HP[...,1] / (dt*NT)
-    HE = (KE * (HE[...,0] - HE[...,1])) / (dt*NT)
+    HT = -(KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
+    HP = -(KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
+    HE = -KE*(HE[...,0] - HE[...,1]) / NT
+    # HT = -HT[...,1] / (dt*NT)
+    # HP = -HP[...,1] / (dt*NT)
+    # HE = (HE[...,0] - HE[...,1]) / (dt*NT)
 
-    FTx = (HTx[0] + HTx[1]) - (1/4)
-    FPx = (HPx[0] + HPx[1]) - (1/2)
+    FTx = (HTx[0] + HTx[1])
+    FPx = (HPx[0] + HPx[1])
     print(np.max(FTx[free_tri_mask == 1]))
     print(np.min(FTx[free_tri_mask == 1]))
     print(np.max(FPx[free_pet_mask == 1]))
     print(np.min(FPx[free_pet_mask == 1]))
     # subtraction??
-    FTx -= np.mean(FTx[free_tri_mask == 1])
-    FPx -= np.mean(FPx[free_pet_mask == 1])
+    # FTx -= np.mean(FTx[free_tri_mask == 1])
+    # FPx -= np.mean(FPx[free_pet_mask == 1])
     FTx[free_tri_mask != 1] = float('nan')
     FPx[free_pet_mask != 1] = float('nan')
 
-    # HTx = (KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
-    # HPx = (KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
-    HTx = -KT*HTx[1]
-    HPx = -KP*HPx[1]
-    HHEx = (HEx[0] - HEx[1])
-    HEx = (KE * (HEx[0] - HEx[1]))
+    HTx = -(KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
+    HPx = -(KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
+    # NOTE(gkanwar): equalize energy density between petals and triangles
+    HTx /= (3/2)
+    # HTx = -HTx[1]
+    # HPx = -HPx[1]
+    # HHEx = (HEx[0] - HEx[1])
+    HEx = -KE * (HEx[0] - HEx[1]) / NT
     Hx = HTx + HPx + HEx
     HTx[free_tri_mask != 1] = float('nan')
     HPx[free_pet_mask != 1] = float('nan')
     HEx[free_pet_mask != 1] = float('nan')
-    HHEx[free_pet_mask != 1] = float('nan')
     Hx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
 
     cmap = plt.get_cmap('PiYG').copy()
@@ -178,7 +180,7 @@ def main():
     ax = axes[1,0]
     cax = axes[1,1]
     ax.set_title(r'$H_E(x)/K_E$')
-    cs = ax.imshow(HHEx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    cs = ax.imshow(HEx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
     ax.set_aspect(1)
     bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
     values = geom[bounds]
@@ -197,9 +199,9 @@ def main():
     fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
 
     ### Plot flippabilities
-    cmap = plt.get_cmap('RdBu').copy()
+    cmap = plt.get_cmap('viridis').copy()
     cmap.set_bad(color='w')
-    cmap2 = plt.get_cmap('RdBu').copy()
+    cmap2 = plt.get_cmap('viridis').copy()
     cmap2.set_bad(color='w', alpha=0.0)
     kwargs = dict(interpolation='nearest')#, vmin=-1.0, vmax=1.0)
 
