@@ -1784,9 +1784,11 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   }
   if (init_kind == INIT_FILE && !init_file) {
     printf("Must provide init_file for file init\n");
+    return E_ARGS;
   }
   if (bc_kind == GEOM_FILE && !geom_file) {
     printf("Must provide geom_file for file geom\n");
+    return E_ARGS;
   }
 
   size_t len = strlen(prefix);
@@ -2050,4 +2052,6 @@ int main(int argc, char** argv) {
   fclose(f_Mx);
   fclose(f_Hx);
   fclose(f_Fx);
+  fclose(f_MT);
+  fclose(f_MP);
 }
