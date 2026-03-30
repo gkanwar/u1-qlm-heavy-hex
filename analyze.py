@@ -83,18 +83,20 @@ def main():
     FTx[free_tri_mask != 1] = float('nan')
     FPx[free_pet_mask != 1] = float('nan')
 
-    HTx = -(KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
-    HPx = -(KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
-    # NOTE(gkanwar): equalize energy density between petals and triangles
-    HTx /= (3/2)
     # HTx = -HTx[1]
     # HPx = -HPx[1]
     # HHEx = (HEx[0] - HEx[1])
     HEx = -KE * (HEx[0] - HEx[1]) / NT
+    HTx = -(KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt)) / NT
+    HPx = -(KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt)) / NT
     Hx = HTx + HPx + HEx
+    HHx = (2/3)*HTx + HPx + HEx
+    # NOTE(gkanwar): equalize energy density between petals and triangles
+    HTx *= (2/3)
     HTx[free_tri_mask != 1] = float('nan')
     HPx[free_pet_mask != 1] = float('nan')
     HEx[free_pet_mask != 1] = float('nan')
+    HHx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
     Hx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
 
     cmap = plt.get_cmap('PiYG').copy()
@@ -152,7 +154,7 @@ def main():
     fig.suptitle(prefix)
     fig.savefig(f'{figs_prefix}.Mx.pdf', dpi=600)
 
-    cmap = plt.get_cmap('viridis').copy()
+    cmap = plt.get_cmap('cividis').copy()
     cmap.set_bad(color='k')
 
     ### Plot localized energies
@@ -161,7 +163,7 @@ def main():
         gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
     ax = axes[0,0]
     cax = axes[0,1]
-    ax.set_title(r'$H_T(x)$')
+    ax.set_title(r'$\frac{2}{3}H_T(x)$')
     cs = ax.imshow(HTx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
     ax.set_aspect(1)
     bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
@@ -179,8 +181,8 @@ def main():
     fig.colorbar(cs, cax=cax)
     ax = axes[1,0]
     cax = axes[1,1]
-    ax.set_title(r'$H_E(x)/K_E$')
-    cs = ax.imshow(HEx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_title(r'$H(x) = H_P(x) + H_T(x)$')
+    cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
     ax.set_aspect(1)
     bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
     values = geom[bounds]
@@ -188,8 +190,8 @@ def main():
     fig.colorbar(cs, cax=cax)
     ax = axes[1,2]
     cax = axes[1,3]
-    ax.set_title(r'$H(x)$')
-    cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+    ax.set_title(r'$H_P(x) + \frac{2}{3}H_T(x)$')
+    cs = ax.imshow(HHx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
     ax.set_aspect(1)
     bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
     values = geom[bounds]
@@ -199,9 +201,9 @@ def main():
     fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
 
     ### Plot flippabilities
-    cmap = plt.get_cmap('viridis').copy()
+    cmap = plt.get_cmap('magma').copy()
     cmap.set_bad(color='w')
-    cmap2 = plt.get_cmap('viridis').copy()
+    cmap2 = plt.get_cmap('magma').copy()
     cmap2.set_bad(color='w', alpha=0.0)
     kwargs = dict(interpolation='nearest')#, vmin=-1.0, vmax=1.0)
 
@@ -217,14 +219,14 @@ def main():
     ax = axes[0,2]
     cax = axes[0,3]
     ax.set_title(r'$F_P(x)$')
-    cs = ax.imshow(-FPx, cmap=cmap, **kwargs)
+    cs = ax.imshow(FPx, cmap=cmap, **kwargs)
     ax.set_aspect(1)
     fig.colorbar(cs, cax=cax)
     ax = axes[1,0]
     cax = axes[1,1]
     ax.set_title(r'$F_T(x), F_P(x)$')
     cs = ax.imshow(FTx, cmap=cmap, **kwargs)
-    cs = ax.imshow(-FPx, cmap=cmap2, **kwargs)
+    cs = ax.imshow(FPx, cmap=cmap2, **kwargs)
     ax.set_aspect(1)
     fig.colorbar(cs, cax=cax)
     # ax = axes[1,2]
@@ -291,8 +293,7 @@ def main():
 
     # N_TRI = NX * NY / 4
     # N_PET = NX * NY*3 / 8
-    # H_est = al.bootstrap(-HT - HP - HE, Nboot=1000, f=al.rmean)
-    H_est = al.bootstrap(HT + HP + HE, Nboot=1000, f=al.rmean)
+    H_est = al.bootstrap(al.bin_data(HT + HP + HE, binsize=50)[1], Nboot=1000, f=al.rmean)
     print(f'Ground state energy: {H_est}')
         
     # plt.show()
