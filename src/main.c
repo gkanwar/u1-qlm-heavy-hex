@@ -1394,13 +1394,14 @@ void measure_HP_HE_pet_even(
   }
   // relevant petals
   bool pet = lattice[ind_pet_even(t, i, j)];
+  bool has_dirac_str = dirac_str[ind_pet_even(0, i, j)];
   int t_fwd = wrap_t(t+1);
   bool pet_fwd = lattice[ind_pet_even(t_fwd, i, j)];
-  int j_l = j;
-  int j_r = wrap_dj(j+1);
 
   // relevant triangles
-  bool tri_l = lattice[ind_tri(t, i, j_l)];
+  int j_l = j;
+  int j_r = wrap_dj(j+1);
+  bool tri_l = lattice[ind_tri(t, i, j_l)] ^ has_dirac_str;
   bool tri_r = lattice[ind_tri(t, i, j_r)];
 
   bool delta_b = (pet == pet_fwd);
@@ -1425,9 +1426,10 @@ void measure_HP_HE_pet_odd(
   int i_u = i;
   int i_d = wrap_i(i+1);
   int j_even = 2*j + (i % 2);
+  bool has_dirac_str = dirac_str[ind_pet_odd(0, i, j)];
 
   // relevant triangles
-  bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+  bool tri_u = lattice[ind_tri(t, i_u, j_even)] ^ has_dirac_str;
   bool tri_d = lattice[ind_tri(t, i_d, j_even)];
 
   bool delta_b = (pet == pet_fwd);
@@ -1475,13 +1477,18 @@ void measure_HT_tri(int t, int i, int j, uint64_t* HT_plus, uint64_t* HT_minus) 
   int t_fwd = wrap_t(t+1);
   bool tri_fwd = lattice[ind_tri(t_fwd, i, j)];
   int j_l = wrap_dj(j-1);
-  int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
+  bool even_site = (i+j) % 2 == 0;
+  int pet_i_ud = wrap_i(even_site ? i : i-1);
+  bond_bit UD = even_site ? DOWN : UP;
 
   // relevant petals
   int j_odd = j/2;
+  bool has_dirac_str_r = dirac_str[ind_pet_even(0, i, j)];
+  bool has_dirac_str_ud = dirac_str[ind_pet_odd(0, pet_i_ud, j_odd)];
+  bool has_dirac_str_pet_ud = has_dirac_str_ud && (UD == DOWN);
   bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
-  bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
-  bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+  bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)] ^ has_dirac_str_r;
+  bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)] ^ has_dirac_str_pet_ud;
 
   bool delta_a = (tri == tri_fwd);
   bool delta_b = (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
@@ -1548,27 +1555,27 @@ void measure_Fx_pet_even(int t, int i, int j, uint64_t* Fx) {
   *Fx += (tri_l == tri_r);
 }
 
-void measure_Fx_pet_odd(int t, int i, int j, uint64_t* Fx) {
-  // relevant triangles
-  int i_u = i;
-  int i_d = wrap_i(i+1);
-  int j_even = 2*j + (i % 2);
-  bool tri_u = lattice[ind_tri(t, i_u, j_even)];
-  bool tri_d = lattice[ind_tri(t, i_d, j_even)];
-  *Fx += (tri_u == tri_d);
-}
+// void measure_Fx_pet_odd(int t, int i, int j, uint64_t* Fx) {
+//   // relevant triangles
+//   int i_u = i;
+//   int i_d = wrap_i(i+1);
+//   int j_even = 2*j + (i % 2);
+//   bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+//   bool tri_d = lattice[ind_tri(t, i_d, j_even)];
+//   *Fx += (tri_u == tri_d);
+// }
 
-void measure_Fx_tri(int t, int i, int j, uint64_t* Fx) {
-  // relevant petals
-  int t_fwd = wrap_t(t+1);
-  int j_l = wrap_dj(j-1);
-  int j_odd = j/2;
-  int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
-  bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
-  bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
-  bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
-  *Fx += (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
-}
+// void measure_Fx_tri(int t, int i, int j, uint64_t* Fx) {
+//   // relevant petals
+//   int t_fwd = wrap_t(t+1);
+//   int j_l = wrap_dj(j-1);
+//   int j_odd = j/2;
+//   int pet_i_ud = wrap_i(((i+j) % 2 == 0) ? i : i-1);
+//   bool pet_fwd_l = lattice[ind_pet_even(t_fwd, i, j_l)];
+//   bool pet_fwd_r = lattice[ind_pet_even(t_fwd, i, j)];
+//   bool pet_fwd_ud = lattice[ind_pet_odd(t_fwd, pet_i_ud, j_odd)];
+//   *Fx += (pet_fwd_l == pet_fwd_r && pet_fwd_r == pet_fwd_ud);
+// }
 
 void measure_Ex_pet_even(int t, int i, int j, int64_t* Ex) {
   if (geom[ind_pet_even(0, i, j)] != FREE) {
@@ -1877,12 +1884,11 @@ int main(int argc, char** argv) {
   FILE *f_Mx = fopen(cfg.fname_Mx, "wb");
   FILE *f_Hx = fopen(cfg.fname_Hx, "wb");
   FILE *f_Ex = fopen(cfg.fname_Ex, "wb");
-  FILE *f_Fx = fopen(cfg.fname_Fx, "wb");
+  // FILE *f_Fx = fopen(cfg.fname_Fx, "wb");
   if (f == NULL || f_meta == NULL ||
       f_HT == NULL || f_HP == NULL || f_HE == NULL ||
       f_MT == NULL || f_MP == NULL ||
-      f_Mx == NULL || f_Hx == NULL || f_Ex == NULL ||
-      f_Fx == NULL)  {
+      f_Mx == NULL || f_Hx == NULL || f_Ex == NULL)  {
     printf("Failed to open output file\n");
     return E_OUT_FILE;
   }
@@ -1954,7 +1960,7 @@ int main(int argc, char** argv) {
           int ind = ind_tri(0, i, j);
           measure_HT_tri(
               t, i, j, &HT_plus_accum[ind], &HT_minus_accum[ind]);
-          measure_Fx_tri(t, i, j, &Fx_accum[ind]);
+          // measure_Fx_tri(t, i, j, &Fx_accum[ind]);
         }
       }
       // even petals (HP, HE)
@@ -1965,7 +1971,7 @@ int main(int argc, char** argv) {
               t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
               &HE_plus_accum[ind], &HE_minus_accum[ind]);
           measure_Ex_pet_even(t, i, j, &Ex_accum[ind]);
-          measure_Fx_pet_even(t, i, j, &Fx_accum[ind]);
+          // measure_Fx_pet_even(t, i, j, &Fx_accum[ind]);
         }
       }
       // odd petals (HP, HE)
@@ -1976,7 +1982,7 @@ int main(int argc, char** argv) {
               t, i, j, &HP_plus_accum[ind], &HP_minus_accum[ind],
               &HE_plus_accum[ind], &HE_minus_accum[ind]);
           measure_Ex_pet_odd(t, i, j, &Ex_accum[ind]);
-          measure_Fx_pet_odd(t, i, j, &Fx_accum[ind]);
+          // measure_Fx_pet_odd(t, i, j, &Fx_accum[ind]);
         }
       }
       H_n++;
@@ -2016,11 +2022,11 @@ int main(int argc, char** argv) {
     Ex[i] = Ex_accum[i] / (double)Ex_n;
   }
   fwrite(Ex, sizeof(double), EROWS*ECOLS, f_Ex);
-  double Fx[EROWS * ECOLS];
-  for (int i = 0; i < EROWS * ECOLS; ++i) {
-    Fx[i] = Fx_accum[i] / (double)Fx_n;
-  }
-  fwrite(Fx, sizeof(double), EROWS*ECOLS, f_Fx);
+  // double Fx[EROWS * ECOLS];
+  // for (int i = 0; i < EROWS * ECOLS; ++i) {
+  //   Fx[i] = Fx_accum[i] / (double)Fx_n;
+  // }
+  // fwrite(Fx, sizeof(double), EROWS*ECOLS, f_Fx);
 
   double HT_plus[EROWS * ECOLS], HT_minus[EROWS * ECOLS];
   double HP_plus[EROWS * ECOLS], HP_minus[EROWS * ECOLS];
@@ -2051,7 +2057,7 @@ int main(int argc, char** argv) {
   fclose(f_HE);
   fclose(f_Mx);
   fclose(f_Hx);
-  fclose(f_Fx);
+  // fclose(f_Fx);
   fclose(f_MT);
   fclose(f_MP);
 }
