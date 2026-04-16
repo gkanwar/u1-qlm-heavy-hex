@@ -467,8 +467,9 @@ void init_lat_file(const char* fname) {
   for (size_t i = 0; i < init_size; ++i) {
     if (geom[i] == DUMMY) {
       if (init_file_buffer[i] != 0xff) {
-        printf("Init file set dummy site %lu to %d\n", i, init_file_buffer[i]);
-        valid = false;
+        // just ignore this, as it's easier to write init files ignoring this
+        printf("WARNING: Init file set dummy site %lu to %d\n", i, init_file_buffer[i]);
+        // valid = false;
       }
     }
     else if (geom[i] == FREE) {
@@ -1583,11 +1584,12 @@ void measure_Ex_pet_even(int t, int i, int j, int64_t* Ex) {
   }
   // relevant petals
   bool pet = lattice[ind_pet_even(t, i, j)];
-  int j_l = j;
-  int j_r = wrap_dj(j+1);
+  bool has_dirac_str = dirac_str[ind_pet_even(0, i, j)];
 
   // relevant triangles
-  bool tri_l = lattice[ind_tri(t, i, j_l)];
+  int j_l = j;
+  int j_r = wrap_dj(j+1);
+  bool tri_l = lattice[ind_tri(t, i, j_l)] ^ has_dirac_str;
   bool tri_r = lattice[ind_tri(t, i, j_r)];
 
   int diff_l = wrap_mod4(2*tri_l - 1 - 2*pet);
@@ -1602,9 +1604,10 @@ void measure_Ex_pet_odd(int t, int i, int j, int64_t* Ex) {
   int i_u = i;
   int i_d = wrap_i(i+1);
   int j_even = 2*j + (i % 2);
+  bool has_dirac_str = dirac_str[ind_pet_odd(0, i, j)];
 
   // relevant triangles
-  bool tri_u = lattice[ind_tri(t, i_u, j_even)];
+  bool tri_u = lattice[ind_tri(t, i_u, j_even)] ^ has_dirac_str;
   bool tri_d = lattice[ind_tri(t, i_d, j_even)];
 
   int diff_u = wrap_mod4(2*tri_u - 1 - 2*pet);
