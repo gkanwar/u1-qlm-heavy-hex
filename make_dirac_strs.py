@@ -44,8 +44,8 @@ def make_init2(nrows, ncols, r, fname):
     out.tofile(fname)
 
 def main():
-    L = 64
-    for r in range(8, 48, 4):
+    L = 48
+    for r in range(8, 32, 4):
         make_dirac_str(L, L, r, f'geoms/{L}_{L}_r{r}_dirac_str.dat')
         make_dirac_str2(L, L, r, f'geoms/{L}_{L}_r{r}_dirac_str2.dat')
         make_init2(L, L, r, f'geoms/{L}_{L}_r{r}_init2.dat')
