@@ -219,8 +219,8 @@ def main():
     fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
 
     fig, ax = plt.subplots(1,1)
-    HHx_smear = smear_Hx(HHx)
-    cs = ax.imshow(HHx_smear, cmap=cmap, interpolation='nearest')
+    Hx_smear = smear_Hx(Hx)
+    cs = ax.imshow(Hx_smear, cmap=cmap, interpolation='nearest')
     fig.colorbar(cs, ax=ax)
     fig.savefig(f'{figs_prefix}.Hx_smr.pdf', dpi=600)
 
