@@ -5,6 +5,7 @@ import numpy as np
 import os
 import paper_plt
 paper_plt.load_basic_config()
+import scipy as sp
 import struct
 
 def x_over_tanh(x, c):
@@ -13,6 +14,23 @@ def x_over_tanh(x, c):
         np.ones_like(x) / c, # small arg limit
         x / np.tanh(c * x)
     )
+
+def smear_Hx(Hx):
+    kernel = np.array([
+        [1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1],
+    ])
+    Hx = np.where(np.isfinite(Hx), Hx, 0)
+    Hx = sp.signal.convolve2d(kernel, Hx, mode='valid')
+    Hx = Hx[::2]
+    out = []
+    for x, Hxi in enumerate(Hx):
+        if x % 2 == 0:
+            out.append(Hxi[::4])
+        else:
+            out.append(Hxi[2::4])
+    return np.stack(out)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -199,6 +217,12 @@ def main():
     fig.colorbar(cs, cax=cax)
     fig.suptitle(prefix)
     fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
+
+    fig, ax = plt.subplots(1,1)
+    HHx_smear = smear_Hx(HHx)
+    cs = ax.imshow(HHx_smear, cmap=cmap, interpolation='nearest')
+    fig.colorbar(cs, ax=ax)
+    fig.savefig(f'{figs_prefix}.Hx_smr.pdf', dpi=600)
 
     ### Plot flippabilities
     cmap = plt.get_cmap('magma').copy()
