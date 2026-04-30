@@ -1671,7 +1671,7 @@ int parse_args(int argc, char** argv, config_t* cfg) {
   const char* init_file = NULL;
   const char* dirac_str_file = NULL;
   const char* prefix;
-  char c;
+  int c;
   while ((c = getopt(argc, argv, "t:p:e:f:i:s:m:b:c:r:x:y:z:d:")) != -1) {
     if (c == 't') {
       dt = atof(optarg);
@@ -1768,6 +1768,7 @@ int parse_args(int argc, char** argv, config_t* cfg) {
     }
     else {
       usage(argv[0]);
+      printf("Unknown flag -%c\n", c);
       return E_ARGS;
     }
   }

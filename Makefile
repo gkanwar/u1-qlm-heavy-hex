@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-std=gnu99 -Wall -Wextra
+CFLAGS=-std=gnu99 -Wall -Wextra -march=native
 CFLAGS_DBG=-O0 -g $(CFLAGS)
 CFLAGS_REL=-O3 -DNDEBUG -g $(CFLAGS)
 CFLAGS_PROF=-O3 -DNDEBUG -pg -g $(CFLAGS)
