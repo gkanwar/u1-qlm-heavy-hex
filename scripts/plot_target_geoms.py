@@ -1,0 +1,384 @@
+import argparse
+import analysis as al
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import paper_plt
+paper_plt.load_latex_config()
+import scipy as sp
+import struct
+
+def x_over_tanh(x, c):
+    return np.where(
+        np.isclose(c * x, 0.0),
+        np.ones_like(x) / c, # small arg limit
+        x / np.tanh(c * x)
+    )
+
+def load_data(prefix):
+    with open(f'{prefix}.meta.dat', 'rb') as f:
+        meta_bytes = f.read()
+    header = 'dddiiiI'
+    h_size = struct.calcsize(header)
+    (dt, KP, KE, NT, NX, NY, seed) = struct.unpack(header, meta_bytes[:h_size])
+    print(f'Couplings: {dt=} {KP=} {KE=}')
+    print(f'Shape: {NT=} {NX=} {NY=}')
+    print(f'Seed: {seed=}')
+    geom = np.frombuffer(meta_bytes[h_size:], dtype=np.uint8).reshape(NX, NY)
+    # ens = np.fromfile(f'{prefix}.ens.dat', dtype=np.uint8).reshape(-1, NT, NX, NY)
+    mx = np.fromfile(f'{prefix}.Mx.dat', dtype=np.float64).reshape(NX, NY)
+    Ex = np.fromfile(f'{prefix}.Ex.dat', dtype=np.float64).reshape(NX, NY)
+    HTx, HPx, HEx = np.fromfile(f'{prefix}.Hx.dat', dtype=np.float64).reshape(3, 2, NX, NY)
+    free_tri_mask = np.zeros_like(geom)
+    free_tri_mask[::2,::2][geom[::2,::2] == 0xff] = 1
+    free_pet_even_mask = np.zeros_like(geom)
+    free_pet_odd_mask = np.zeros_like(geom)
+    free_pet_even_mask[:,1::2][geom[:,1::2] == 0xff] = 1
+    free_pet_odd_mask[1::2,:][geom[1::2,:] == 0xff] = 1
+    free_pet_mask = free_pet_even_mask | free_pet_odd_mask
+    N_FREE_TRI = np.sum(free_tri_mask)
+    N_FREE_PET = np.sum(free_pet_mask)
+    print(f'Geom:\n{geom}')
+    print(f'{N_FREE_TRI=} {N_FREE_PET=}')
+
+    # print(ens[0,0])
+    # print(ens[1,0])
+    # print(ens[2,0])
+    # print(ens[3,0])
+    
+    HT = np.fromfile(f'{prefix}.HT.dat', dtype=np.int64).reshape(-1, 2)
+    HP = np.fromfile(f'{prefix}.HP.dat', dtype=np.int64).reshape(-1, 2)
+    HE = np.fromfile(f'{prefix}.HE.dat', dtype=np.int64).reshape(-1, 2)
+    assert HT.shape[0] == HP.shape[0] == HE.shape[0]
+    print(f'{HT.shape=}')
+    # DB conventions
+    # KT = 4
+    # KP *= 2
+    # GK conventions
+    KT = 1
+    HT = -(KT*HT[...,0]*np.tanh(dt * KT) + HT[...,1]*x_over_tanh(KT, dt)) / NT
+    HP = -(KP*HP[...,0]*np.tanh(dt * KP) + HP[...,1]*x_over_tanh(KP, dt)) / NT
+    HE = -KE*(HE[...,0] - HE[...,1]) / NT
+    # HT = -HT[...,1] / (dt*NT)
+    # HP = -HP[...,1] / (dt*NT)
+    # HE = (HE[...,0] - HE[...,1]) / (dt*NT)
+
+    FTx = (HTx[0] + HTx[1])
+    FPx = (HPx[0] + HPx[1])
+    print(np.max(FTx[free_tri_mask == 1]))
+    print(np.min(FTx[free_tri_mask == 1]))
+    print(np.max(FPx[free_pet_mask == 1]))
+    print(np.min(FPx[free_pet_mask == 1]))
+    # subtraction??
+    # FTx -= np.mean(FTx[free_tri_mask == 1])
+    # FPx -= np.mean(FPx[free_pet_mask == 1])
+    FTx[free_tri_mask != 1] = float('nan')
+    FPx[free_pet_mask != 1] = float('nan')
+
+    # HTx = -HTx[1]
+    # HPx = -HPx[1]
+    # HHEx = (HEx[0] - HEx[1])
+    HEx = -KE * (HEx[0] - HEx[1])
+    HTx = -(KT*HTx[0]*np.tanh(dt * KT) + HTx[1]*x_over_tanh(KT, dt))
+    HPx = -(KP*HPx[0]*np.tanh(dt * KP) + HPx[1]*x_over_tanh(KP, dt))
+    Hx = HTx + HPx + HEx
+    # NOTE(gkanwar): equalize energy density between petals and triangles
+    HHx = (2/3)*HTx + HPx + HEx
+    HTx[free_tri_mask != 1] = float('nan')
+    HPx[free_pet_mask != 1] = float('nan')
+    HEx[free_pet_mask != 1] = float('nan')
+    HHx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
+    Hx[(free_tri_mask != 1) & (free_pet_mask != 1)] = float('nan')
+
+    MTx = mx - 0.5
+    MTx[free_tri_mask != 1] = float('nan')
+    MPx = mx - 0.5
+    MPx[free_pet_mask != 1] = float('nan')
+    Ex[free_pet_mask != 1] = float('nan')
+
+    return dict(
+        # global
+        HE=HE, HT=HT, HP=HP,
+        # spatially resolved
+        Hx=Hx, HHx=HHx, HEx=HEx, HTx=HTx, HPx=HPx,
+        FTx=FTx, FPx=FPx, MTx=MTx, MPx=MPx, Ex=Ex,
+        # metadata
+        geom=geom, dt=dt, KP=KP, KE=KE, NT=NT, NX=NX, NY=NY,
+    )
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--prefix', type=str, required=True)
+    args = parser.parse_args()
+    prefix_dir = args.prefix
+    figs_dir = os.path.join(prefix_dir, 'figs')
+    os.makedirs(figs_dir, exist_ok=True)
+    figs_prefix = os.path.join(figs_dir, 'final')
+    # figs_prefix = os.path.join(figs_dir, prefix_tail)
+
+    small_name = '16T29P10O'
+    large_name = '42T72P18O'
+    small_crop = ((2, 12), (0, 12))
+    large_crop = ((0, 14), (0, 16))
+
+    small_data = [
+        load_data(os.path.join(prefix_dir, f'{small_name}/final_KP0.40_T128')),
+        load_data(os.path.join(prefix_dir, f'{small_name}/final_KP0.70_T128')),
+        load_data(os.path.join(prefix_dir, f'{small_name}/final_KP2.00_T128')),
+    ]
+    large_data = [
+        load_data(os.path.join(prefix_dir, f'{large_name}/final_KP0.40_T128')),
+        load_data(os.path.join(prefix_dir, f'{large_name}/final_KP0.70_T128')),
+        load_data(os.path.join(prefix_dir, f'{large_name}/final_KP2.00_T128')),
+    ]
+    small_vranges = [
+        (-0.5, -0.10), (-0.5, -0.25), (-2.0, 0.0),
+    ]
+    large_vranges = [
+        (-0.5, -0.10), (-0.5, -0.25), (-2.0, 0.0),
+    ]
+
+    ### Final plots (1) small lattice, (2) large lattice
+    fig, axes = plt.subplots(3, 3, figsize=(6, 4), gridspec_kw=dict(
+        top=0.92, bottom=0.05, left=0.05, right=0.95, hspace=0.02, wspace=0.05,
+    ), layout='constrained')
+    axes[0,0].set_ylabel(r'$K_P = 0.4$')
+    axes[1,0].set_ylabel(r'$K_P = 0.7$')
+    axes[2,0].set_ylabel(r'$K_P = 2.0$')
+
+    all_data = small_data
+    vranges = small_vranges
+    crop = small_crop
+    cmap = plt.get_cmap('magma')
+    for i, (data, ax_row, vrange) in enumerate(zip(all_data, axes, vranges)):
+        if i == 0:
+            ax_row[0].set_title(r'$H_T$')
+            ax_row[1].set_title(r'$H_P$')
+            ax_row[2].set_title(r'$H_T + H_P$')
+        HTx, HPx, Hx = data['HTx'], data['HPx'], data['Hx']
+        print(f'{np.nanmax(HTx)=} {np.nanmax(HPx)=}')
+        vmin, vmax = vrange
+        style = dict(vmin=vmin, vmax=vmax, interpolation='none', cmap=cmap)
+        ax = ax_row[0]
+        cs = ax.imshow(HTx, **style)
+        ax = ax_row[1]
+        cs = ax.imshow(HPx, **style)
+        ax = ax_row[2]
+        cs = ax.imshow(Hx, **style)
+        fig.colorbar(cs, ax=ax_row, shrink=0.8)
+    for ax in axes.flatten():
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlim(*crop[1])
+        ax.set_ylim(*crop[0])
+    fig.savefig(f'{figs_prefix}_{small_name}.Hx.pdf')
+
+    fig, axes = plt.subplots(3, 3, figsize=(6, 4), gridspec_kw=dict(
+        top=0.92, bottom=0.05, left=0.05, right=0.95, hspace=0.02, wspace=0.05,
+    ), layout='constrained')
+    axes[0,0].set_ylabel(r'$K_P = 0.4$')
+    axes[1,0].set_ylabel(r'$K_P = 0.7$')
+    axes[2,0].set_ylabel(r'$K_P = 2.0$')
+
+    all_data = large_data
+    vranges = large_vranges
+    crop = large_crop
+    cmap = plt.get_cmap('magma')
+    for i, (data, ax_row, vrange) in enumerate(zip(all_data, axes, vranges)):
+        if i == 0:
+            ax_row[0].set_title(r'$H_T$')
+            ax_row[1].set_title(r'$H_P$')
+            ax_row[2].set_title(r'$H_T + H_P$')
+        HTx, HPx, Hx = data['HTx'], data['HPx'], data['Hx']
+        print(f'{np.nanmax(HTx)=} {np.nanmax(HPx)=}')
+        vmin, vmax = vrange
+        style = dict(vmin=vmin, vmax=vmax, interpolation='none', cmap=cmap)
+        ax = ax_row[0]
+        cs = ax.imshow(HTx, **style)
+        ax = ax_row[1]
+        cs = ax.imshow(HPx, **style)
+        ax = ax_row[2]
+        cs = ax.imshow(Hx, **style)
+        fig.colorbar(cs, ax=ax_row, shrink=0.8)
+    for ax in axes.flatten():
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlim(*crop[1])
+        ax.set_ylim(*crop[0])
+    fig.savefig(f'{figs_prefix}_{large_name}.Hx.pdf')
+    
+    plt.show()
+    return
+
+'''
+# stacked images
+ax = axes[1,0]
+ax.set_title(r'$M_T(x)$, $M_P(x)$')
+vmax = np.nanmax(np.abs(MTx))
+ax.imshow(MTx, cmap=cmap, vmin=-vmax, vmax=vmax, interpolation='nearest')
+vmax = np.nanmax(np.abs(MPx))
+ax.imshow(MPx, cmap=cmap2, vmin=-vmax, vmax=vmax, interpolation='nearest')
+ax.set_aspect(1)
+# Ex
+ax = axes[1,1]
+ax.set_title(r'$E_P(x)$')
+vmax = np.nanmax(np.abs(Ex))
+cs = ax.imshow(Ex, cmap=cmap, vmin=-vmax, vmax=vmax, interpolation='nearest')
+fig.colorbar(cs, ax=ax)
+
+fig.suptitle(prefix)
+fig.savefig(f'{figs_prefix}.Mx.pdf', dpi=600)
+
+cmap = plt.get_cmap('cividis').copy()
+cmap.set_bad(color='k')
+
+### Plot localized energies
+fig, axes = plt.subplots(
+    2, 4, layout='compressed', figsize=(10,6),
+    gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
+ax = axes[0,0]
+cax = axes[0,1]
+ax.set_title(r'$\frac{2}{3}H_T(x)$')
+cs = ax.imshow(HTx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+ax.set_aspect(1)
+bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+values = geom[bounds]
+ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+fig.colorbar(cs, cax=cax)
+ax = axes[0,2]
+cax = axes[0,3]
+ax.set_title(r'$H_P(x)$')
+cs = ax.imshow(HPx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+ax.set_aspect(1)
+bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+values = geom[bounds]
+ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+fig.colorbar(cs, cax=cax)
+ax = axes[1,0]
+cax = axes[1,1]
+ax.set_title(r'$H(x) = H_P(x) + H_T(x)$')
+cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+ax.set_aspect(1)
+bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+values = geom[bounds]
+ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+fig.colorbar(cs, cax=cax)
+ax = axes[1,2]
+cax = axes[1,3]
+ax.set_title(r'$H_P(x) + \frac{2}{3}H_T(x)$')
+cs = ax.imshow(HHx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+ax.set_aspect(1)
+bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+values = geom[bounds]
+ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+fig.colorbar(cs, cax=cax)
+fig.suptitle(prefix)
+fig.savefig(f'{figs_prefix}.Hx.pdf', dpi=600)
+
+fig, ax = plt.subplots(1,1)
+Hx_smear = smear_Hx(Hx)
+cs = ax.imshow(Hx_smear, cmap=cmap, interpolation='nearest')
+fig.colorbar(cs, ax=ax)
+fig.savefig(f'{figs_prefix}.Hx_smr.pdf', dpi=600)
+
+### Plot flippabilities
+cmap = plt.get_cmap('magma').copy()
+cmap.set_bad(color='w')
+cmap2 = plt.get_cmap('magma').copy()
+cmap2.set_bad(color='w', alpha=0.0)
+kwargs = dict(interpolation='nearest')#, vmin=-1.0, vmax=1.0)
+
+fig, axes = plt.subplots(
+    2, 4, layout='compressed', figsize=(10,6),
+    gridspec_kw=dict(width_ratios=[0.45, 0.02, 0.45, 0.02]))
+ax = axes[0,0]
+cax = axes[0,1]
+ax.set_title(r'$F_T(x)$')
+cs = ax.imshow(FTx, cmap=cmap, **kwargs)
+ax.set_aspect(1)
+fig.colorbar(cs, cax=cax)
+ax = axes[0,2]
+cax = axes[0,3]
+ax.set_title(r'$F_P(x)$')
+cs = ax.imshow(FPx, cmap=cmap, **kwargs)
+ax.set_aspect(1)
+fig.colorbar(cs, cax=cax)
+ax = axes[1,0]
+cax = axes[1,1]
+ax.set_title(r'$F_T(x), F_P(x)$')
+cs = ax.imshow(FTx, cmap=cmap, **kwargs)
+cs = ax.imshow(FPx, cmap=cmap2, **kwargs)
+ax.set_aspect(1)
+fig.colorbar(cs, cax=cax)
+# ax = axes[1,2]
+# cax = axes[1,3]
+# ax.set_title(r'$H(x)$')
+# cs = ax.imshow(Hx, cmap=cmap, interpolation='nearest') # vmin=-0.5, vmax=0.5, 
+# ax.set_aspect(1)
+# bounds = np.nonzero((geom != 0xff) & (geom != 0xaa))
+# values = geom[bounds]
+# ax.scatter(bounds[1], bounds[0], c=['r' if v == 0 else 'b' for v in values], marker='o')
+# fig.colorbar(cs, cax=cax)
+fig.suptitle(prefix)
+fig.savefig(f'{figs_prefix}.Fx.pdf', dpi=600)
+
+# fig, ax = plt.subplots(1,1)
+# ens_f = ens.astype(np.float64)
+# ens_f[:,:,geom != 0xff] = float('nan')
+# cs = ax.imshow(ens_f.mean(axis=(0, 1)) - 0.5, vmin=-0.5, vmax=0.5, cmap=cmap, interpolation='nearest')
+# ax.set_aspect(1)
+# fig.colorbar(cs)
+# fig.savefig(f'{figs_prefix}.Mx_ens.pdf', dpi=600)
+
+# TODO: extract MT, MP from Mx data instead of ens
+# MA, MB, MP = measure_M(ens, geom)
+# MA, MB, MP = split_M(m, geom)
+# MT = (MA + MB)/2
+
+MT = np.fromfile(f'{prefix}.MT.dat', dtype=np.int64)
+MP = np.fromfile(f'{prefix}.MP.dat', dtype=np.int64)
+MT = MT / float(N_FREE_TRI * NT) - 0.5
+MP = MP / float(N_FREE_PET * NT) - 0.5
+
+### Plot order param histograms
+fig, ax = plt.subplots(1,1)
+bins = np.linspace(-0.5, 0.5, num=51, endpoint=True)
+ax.hist2d(MT, MP, bins=bins) #, range=[[-0.5, 1.5], [-0.5, 1.5]])
+ax.set_xlabel(r'$M_T$')
+ax.set_ylabel(r'$M_P$')
+ax.set_aspect(1)
+fig.suptitle(prefix)
+fig.savefig(f'{figs_prefix}.M_hist.pdf')
+
+# fig, axes = plt.subplots(4,1, sharex=True)
+# axes[0].plot(MA, label='$M_A$')
+# axes[0].legend()
+# axes[1].plot(MB, label='$M_B$')
+# axes[1].legend()
+# axes[2].plot(MT, label='$M_T$')
+# axes[2].legend()
+# axes[3].plot(MP, label='$M_P$')
+# axes[3].legend()
+# fig.savefig(f'{figs_prefix}.M_trace.pdf')
+
+### Plot MCMC histories
+fig, axes = plt.subplots(3, 2, figsize=(6,6), sharey='row')
+for (axl, axr), Hi, label in zip(axes, [HT, HP, HE], ['$H_T$', '$H_P$', '$H_E$']):
+    xs = np.arange(len(Hi))
+    axl.plot(xs[::10], Hi[::10], color='0.8')
+    axl.plot(*al.bin_data(Hi, binsize=10), label=label)
+    axl.legend()
+    axr.hist(Hi, bins=30, orientation='horizontal')
+fig.suptitle(prefix)
+fig.savefig(f'{figs_prefix}.H_trace.pdf')
+
+# N_TRI = NX * NY / 4
+# N_PET = NX * NY*3 / 8
+H_est = al.bootstrap(al.bin_data(HT + HP + HE, binsize=50)[1], Nboot=1000, f=al.rmean)
+print(f'Ground state energy: {H_est}')
+
+# plt.show()
+'''
+
+if __name__ == '__main__':
+    main()
